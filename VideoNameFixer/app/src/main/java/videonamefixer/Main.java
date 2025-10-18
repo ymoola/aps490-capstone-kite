@@ -8,12 +8,26 @@ import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
+import javafx.stage.FileChooser;
+
 
 public class Main extends Application {
     @Override
     public void start(Stage stage) {
-        Button button = new Button("Click Me!");
-        button.setOnAction(e -> button.setText("You clicked me!"));
+        nu.pattern.OpenCV.loadLocally();
+
+        Button button = new Button("Select Video to Analyze");
+        button.setOnAction(e -> {
+            FileChooser fileChooser = new FileChooser();
+            fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("MP4 Files", "*.mp4"));
+            java.io.File selectedFile = fileChooser.showOpenDialog(stage);
+            if (selectedFile != null) {
+                DirectionDetector.Direction result = DirectionDetector.detectMovement(selectedFile.getAbsolutePath(), 5);
+                button.setText("Direction: " + result.toString());
+            } else {
+                button.setText("No file selected");
+            }
+        });
 
         StackPane root = new StackPane(button);
         Scene scene = new Scene(root, 400, 200);
