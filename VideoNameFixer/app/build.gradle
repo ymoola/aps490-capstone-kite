@@ -24,3 +24,21 @@ dependencies {
 test {
     useJUnitPlatform()
 }
+
+// Custom task to run the batch direction detector over the repo-level `videos/` folder
+tasks.register('runBatchDirection', JavaExec) { t ->
+    group = 'application'
+    description = 'Run DirectionDetector over all participant videos and write a CSV.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'videonamefixer.VideoDirectionBatch'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+
+    // Default to repo root (parent of the Gradle root project directory)
+    def repoRootDir = rootProject.rootDir.parentFile ?: rootProject.rootDir
+    def videosDir = project.findProperty('videosDir') ?: new File(repoRootDir, 'videos').absolutePath
+    def outCsv = project.findProperty('outCsv') ?: new File(repoRootDir, 'direction_results.csv').absolutePath
+    def sampleStep = project.findProperty('sampleStep') ?: '5'
+    def noMotionThreshold = project.findProperty('noMotionThreshold') ?: String.valueOf(videonamefixer.DirectionDetector.DEFAULT_NO_MOTION_THRESHOLD)
+
+    args(videosDir, outCsv, sampleStep, noMotionThreshold)
+}
