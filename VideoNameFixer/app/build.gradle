@@ -37,8 +37,10 @@ tasks.register('runBatchDirection', JavaExec) { t ->
     def repoRootDir = rootProject.rootDir.parentFile ?: rootProject.rootDir
     def videosDir = project.findProperty('videosDir') ?: new File(repoRootDir, 'videos').absolutePath
     def outCsv = project.findProperty('outCsv') ?: new File(repoRootDir, 'direction_results.csv').absolutePath
-    def sampleStep = project.findProperty('sampleStep') ?: '5'
+    def sampleStep = project.findProperty('sampleStep') ?: '10'
     def noMotionThreshold = project.findProperty('noMotionThreshold') ?: String.valueOf(videonamefixer.DirectionDetector.DEFAULT_NO_MOTION_THRESHOLD)
+    def earlySeconds = project.findProperty('earlySeconds') ?: String.valueOf(videonamefixer.DirectionDetector.DEFAULT_EARLY_SECONDS)
+    def earlyWeight = project.findProperty('earlyWeight') ?: String.valueOf(videonamefixer.DirectionDetector.DEFAULT_EARLY_WEIGHT)
 
-    args(videosDir, outCsv, sampleStep, noMotionThreshold)
+    args(videosDir, outCsv, sampleStep, noMotionThreshold, earlySeconds, earlyWeight)
 }

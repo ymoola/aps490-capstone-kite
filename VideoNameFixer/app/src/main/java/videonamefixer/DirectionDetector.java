@@ -3,6 +3,7 @@ package videonamefixer;
 import org.opencv.core.*;
 import org.opencv.video.Video;
 import org.opencv.videoio.VideoCapture;
+import org.opencv.videoio.Videoio;
 import org.opencv.imgproc.Imgproc;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,7 +14,9 @@ public class DirectionDetector {
 
     public enum Direction { LEFT, RIGHT, UNDETERMINED }
 
-    public static final double DEFAULT_NO_MOTION_THRESHOLD = 0.01;
+    public static final double DEFAULT_NO_MOTION_THRESHOLD = 0.005;
+    public static final double DEFAULT_EARLY_SECONDS = 3.0;
+    public static final double DEFAULT_EARLY_WEIGHT = 3.0;
 
     public static class DetectionResult {
         public final Direction direction;
@@ -28,10 +31,19 @@ public class DirectionDetector {
     }
 
     public static DetectionResult detectMovementResult(String videoPath, int sampleStep) {
-        return detectMovementResult(videoPath, sampleStep, DEFAULT_NO_MOTION_THRESHOLD);
+        return detectMovementResult(videoPath, sampleStep, DEFAULT_NO_MOTION_THRESHOLD,
+                DEFAULT_EARLY_SECONDS, DEFAULT_EARLY_WEIGHT);
     }
 
     public static DetectionResult detectMovementResult(String videoPath, int sampleStep, double noMotionThreshold) {
+        return detectMovementResult(videoPath, sampleStep, noMotionThreshold,
+                DEFAULT_EARLY_SECONDS, DEFAULT_EARLY_WEIGHT);
+    }
+
+    public static DetectionResult detectMovementResult(String videoPath, int sampleStep,
+                                                       double noMotionThreshold,
+                                                       double earlySeconds,
+                                                       double earlyWeight) {
         VideoCapture cap = new VideoCapture(videoPath);
         if (!cap.isOpened()) {
             System.err.println("Cannot open: " + videoPath);
@@ -42,6 +54,12 @@ public class DirectionDetector {
         Mat gray = new Mat();
         List<Double> meanDx = new ArrayList<>();
         int frameCount = 0;
+        double weightedDxSum = 0.0;
+        double weightSum = 0.0;
+        double fps = cap.get(Videoio.CAP_PROP_FPS);
+        if (fps <= 0 || Double.isNaN(fps) || Double.isInfinite(fps)) {
+            fps = 30.0; // fallback if FPS is unavailable
+        }
 
         try {
             while (true) {
@@ -61,7 +79,12 @@ public class DirectionDetector {
                     Core.split(flow, flowParts);
                     Mat flowX = flowParts.get(0);
                     Scalar meanX = Core.mean(flowX);
-                    meanDx.add(meanX.val[0]);
+                    double dx = meanX.val[0];
+                    meanDx.add(dx);
+                    double timeSec = frameCount / fps;
+                    double w = (earlySeconds > 0 && timeSec <= earlySeconds) ? Math.max(1.0, earlyWeight) : 1.0;
+                    weightedDxSum += dx * w;
+                    weightSum += w;
                     flow.release();
                     flowX.release();
                     flowParts.get(1).release();
@@ -72,9 +95,9 @@ public class DirectionDetector {
             cap.release(); prevGray.release(); gray.release();
         }
 
-        double avgDx = meanDx.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
-        if (Math.abs(avgDx) < noMotionThreshold) return new DetectionResult(Direction.UNDETERMINED, false, "Low motion");
-        return new DetectionResult(avgDx > 0 ? Direction.RIGHT : Direction.LEFT, false, "OK");
+        double avgDxWeighted = (weightSum > 0.0) ? (weightedDxSum / weightSum) : 0.0;
+        if (Math.abs(avgDxWeighted) < noMotionThreshold) return new DetectionResult(Direction.UNDETERMINED, false, "Low motion");
+        return new DetectionResult(avgDxWeighted > 0 ? Direction.RIGHT : Direction.LEFT, false, "OK");
     }
 
     public static Direction detectMovement(String videoPath, int sampleStep) {

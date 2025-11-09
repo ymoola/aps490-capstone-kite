@@ -21,6 +21,8 @@ public class VideoDirectionBatch {
         String outputCsvArg = args.length >= 2 ? args[1] : "direction_results.csv";
         int sampleStep = 10; // increase default for faster runtime
         double noMotionThreshold = videonamefixer.DirectionDetector.DEFAULT_NO_MOTION_THRESHOLD;
+        double earlySeconds = videonamefixer.DirectionDetector.DEFAULT_EARLY_SECONDS;
+        double earlyWeight = videonamefixer.DirectionDetector.DEFAULT_EARLY_WEIGHT;
         if (args.length >= 3) {
             try {
                 sampleStep = Integer.parseInt(args[2]);
@@ -29,6 +31,16 @@ public class VideoDirectionBatch {
         if (args.length >= 4) {
             try {
                 noMotionThreshold = Double.parseDouble(args[3]);
+            } catch (NumberFormatException ignored) {}
+        }
+        if (args.length >= 5) {
+            try {
+                earlySeconds = Double.parseDouble(args[4]);
+            } catch (NumberFormatException ignored) {}
+        }
+        if (args.length >= 6) {
+            try {
+                earlyWeight = Double.parseDouble(args[5]);
             } catch (NumberFormatException ignored) {}
         }
 
@@ -44,6 +56,7 @@ public class VideoDirectionBatch {
         System.out.println("Writing results to: " + outputCsv);
         System.out.println("Using sampleStep: " + sampleStep);
         System.out.println("No-motion threshold: " + noMotionThreshold);
+        System.out.println("Early weighting: first " + earlySeconds + "s x" + earlyWeight);
 
         // Ensure parent directories for output exist
         if (outputCsv.getParent() != null) {
@@ -64,7 +77,8 @@ public class VideoDirectionBatch {
                             String fileName = video.getFileName().toString();
                             String resultLabel;
                             try {
-                                DirectionDetector.DetectionResult res = DirectionDetector.detectMovementResult(video.toString(), sampleStep, noMotionThreshold);
+                                DirectionDetector.DetectionResult res = DirectionDetector.detectMovementResult(
+                                        video.toString(), sampleStep, noMotionThreshold, earlySeconds, earlyWeight);
                                 resultLabel = res.error ? "error processing" : res.direction.name();
                             } catch (Throwable t) {
                                 System.err.println("Error processing " + video + ": " + t.getMessage());
