@@ -1,0 +1,46 @@
+plugins {
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
+}
+
+repositories {
+    mavenCentral()
+}
+
+javafx {
+    version = "23"
+    modules = [ 'javafx.controls', 'javafx.fxml' ]
+}
+
+application {
+    mainClass = 'videonamefixer.Main'
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    implementation 'org.openpnp:opencv:4.9.0-0'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Custom task to run the batch direction detector over the repo-level `videos/` folder
+tasks.register('runBatchDirection', JavaExec) { t ->
+    group = 'application'
+    description = 'Run DirectionDetector over all participant videos and write a CSV.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'videonamefixer.VideoDirectionBatch'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+
+    // Default to repo root (parent of the Gradle root project directory)
+    def repoRootDir = rootProject.rootDir.parentFile ?: rootProject.rootDir
+    def videosDir = project.findProperty('videosDir') ?: new File(repoRootDir, 'videos').absolutePath
+    def outCsv = project.findProperty('outCsv') ?: new File(repoRootDir, 'direction_results.csv').absolutePath
+    def sampleStep = project.findProperty('sampleStep') ?: '10'
+    def noMotionThreshold = project.findProperty('noMotionThreshold') ?: String.valueOf(videonamefixer.DirectionDetector.DEFAULT_NO_MOTION_THRESHOLD)
+    def earlySeconds = project.findProperty('earlySeconds') ?: String.valueOf(videonamefixer.DirectionDetector.DEFAULT_EARLY_SECONDS)
+    def earlyWeight = project.findProperty('earlyWeight') ?: String.valueOf(videonamefixer.DirectionDetector.DEFAULT_EARLY_WEIGHT)
+
+    args(videosDir, outCsv, sampleStep, noMotionThreshold, earlySeconds, earlyWeight)
+}
