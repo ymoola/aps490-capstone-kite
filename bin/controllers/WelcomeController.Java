@@ -18,8 +18,10 @@ public class WelcomeController {
     @FXML
     private void gotoSelectPage() {
         try {
+
+            System.out.println("Button clicked!");  // Verify button is linked
             // Load the next FXML page (Select Folder page)
-            FXMLLoader loader = new FXMLLoader(getClass().getResource("/com/renamingapp/fxml/FolderSelection.fxml"));
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("../fxml/FolderSelection.fxml"));
             Parent root = loader.load();
 
             // Get the current stage from the button

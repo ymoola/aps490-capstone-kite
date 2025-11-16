@@ -1,4 +1,4 @@
-package com.renamingapp.controllers;
+package RenamingAppCode.controllers;
 
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
@@ -21,7 +21,7 @@ public class WelcomeController {
 
             System.out.println("Button clicked!");  // Verify button is linked
             // Load the next FXML page (Select Folder page)
-            FXMLLoader loader = new FXMLLoader(getClass().getResource("../fxml/FolderSelection.fxml"));
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/RenamingAppCode/src/com/renamingapp/fxml/FolderSelection.fxml"));
             Parent root = loader.load();
 
             // Get the current stage from the button
