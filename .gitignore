@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+VideoNameFixer/app/src/test/resources/videonamefixer/MAA/
+VideoNameFixer/app/src/test/resources/videonamefixer/Video/
+VideoNameFixer/app/src/test/resources/videonamefixer/Tipper/
+
 # C extensions
 *.so
 

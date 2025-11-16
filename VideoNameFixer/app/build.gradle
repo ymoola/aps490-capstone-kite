@@ -17,8 +17,11 @@ application {
 }
 
 dependencies {
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     implementation 'org.openpnp:opencv:4.9.0-0'
+    implementation 'com.drewnoakes:metadata-extractor:2.18.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    implementation 'org.jmatio:jmatio:1.0'
+
 }
 
 test {
