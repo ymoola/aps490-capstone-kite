@@ -1,4 +1,4 @@
-package com.renamingapp.controllers;
+package RenamingAppCode.controllers;
 
 public class ResultsController {
     

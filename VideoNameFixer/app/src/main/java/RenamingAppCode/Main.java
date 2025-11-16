@@ -1,4 +1,4 @@
-package com.renamingapp;
+package RenamingAppCode;
 
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
@@ -12,7 +12,7 @@ public class Main extends Application {
     public void start (Stage primaryStage){
         try {
              // Load your first FXML file (the welcome page)
-            FXMLLoader fxmlLoader = new FXMLLoader(getClass().getResource("/com/renamingapp/fxml/welcome.fxml"));
+            FXMLLoader fxmlLoader = new FXMLLoader(getClass().getResource("/RenamingAppCode/src/com/renamingapp/fxml/welcome.fxml"));
             Parent root = (Parent)fxmlLoader.load();
             Scene scene = new Scene(root);
 
