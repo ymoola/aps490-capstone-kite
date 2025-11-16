@@ -12,7 +12,8 @@ public class Main extends Application {
     public void start (Stage primaryStage){
         try {
              // Load your first FXML file (the welcome page)
-            FXMLLoader fxmlLoader = new FXMLLoader(getClass().getResource("/RenamingAppCode/src/com/renamingapp/fxml/welcome.fxml"));
+            System.out.println(getClass().getResource("/fxml/Welcome.fxml"));
+            FXMLLoader fxmlLoader = new FXMLLoader(getClass().getResource("/fxml/Welcome.fxml"));
             Parent root = (Parent)fxmlLoader.load();
             Scene scene = new Scene(root);
 

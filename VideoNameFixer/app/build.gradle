@@ -3,6 +3,18 @@ plugins {
     id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+        }
+        resources {
+            srcDirs = ['src/main/resources']
+        }
+    }
+}
+
+
 repositories {
     mavenCentral()
 }
@@ -20,12 +32,27 @@ dependencies {
     implementation 'org.openpnp:opencv:4.9.0-0'
     implementation 'com.drewnoakes:metadata-extractor:2.18.0'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
-    implementation 'org.jmatio:jmatio:1.0'
 
 }
 
 test {
     useJUnitPlatform()
+}
+
+// Custom task for RenamingAppCode.Main with proper JavaFX setup
+tasks.register('runRenamingApp', JavaExec) { t ->
+    group = 'application'
+    description = 'Run RenamingAppCode.Main (File Renaming App)'
+
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'RenamingAppCode.Main'
+
+    jvmArgs = [
+        '--enable-native-access=ALL-UNNAMED',
+        '--module-path', sourceSets.main.runtimeClasspath.asPath,
+        '--add-modules', 'javafx.controls,javafx.fxml',
+        '--enable-native-access=javafx.graphics'
+    ]
 }
 
 // Custom task to run the batch direction detector over the repo-level `videos/` folder
