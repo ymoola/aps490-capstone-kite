@@ -1,0 +1,6 @@
+path: C:\Capstone\Yolo\YoloPoseTesting\dataset
+train: train
+nc: 2
+names:
+  0: 'two_foot'
+  1: 'no_two_foot'
