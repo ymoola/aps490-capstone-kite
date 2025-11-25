@@ -6,6 +6,13 @@
             "name": "Main",
             "request": "launch",
             "mainClass": "RenamingAppCode.Main",
+            "projectName": ""
+        },
+        {
+            "type": "java",
+            "name": "Main",
+            "request": "launch",
+            "mainClass": "RenamingAppCode.Main",
             "projectName": "app"
         },
         {
