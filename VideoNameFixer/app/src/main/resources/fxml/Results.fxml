@@ -40,7 +40,7 @@
 <?import javafx.scene.text.Font?>
 <?import javafx.scene.text.Text?>
 
-<VBox prefHeight="400.0" prefWidth="640.0" xmlns="http://javafx.com/javafx/25" xmlns:fx="http://javafx.com/fxml/1">
+<VBox prefHeight="400.0" prefWidth="640.0" xmlns="http://javafx.com/javafx/25" xmlns:fx="http://javafx.com/fxml/1" fx:controller="RenamingAppCode.controllers.ResultsController">
   <children>
     <AnchorPane maxHeight="-1.0" maxWidth="-1.0" prefHeight="-1.0" prefWidth="-1.0" VBox.vgrow="ALWAYS">
       <children>
@@ -52,23 +52,23 @@
             <HBox layoutX="36.0" layoutY="105.0" prefHeight="25.0" prefWidth="470.0">
                <children>
                   <TextField editable="false" prefHeight="25.0" prefWidth="427.0" />
-                  <Button fx:id="VideoFolderBrowseButtonFinal" mnemonicParsing="false" prefHeight="25.0" prefWidth="79.0" text="Browse" textAlignment="RIGHT" />
+                  <Button fx:id="VideoFolderBrowseButtonFinal" mnemonicParsing="false" onAction="#openVideoFolder" prefHeight="25.0" prefWidth="79.0" text="Browse" textAlignment="RIGHT" />
                </children>
             </HBox>
             <HBox layoutX="36.0" layoutY="174.0">
                <children>
                   <TextField editable="false" prefHeight="25.0" prefWidth="409.0" />
-                  <Button fx:id="MAAFolderBrowseButtonFinal" mnemonicParsing="false" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
+                  <Button fx:id="MAAFolderBrowseButtonFinal" mnemonicParsing="false" onAction="#openMAAFolder" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
                </children>
             </HBox>
             <HBox layoutX="36.0" layoutY="246.0">
                <children>
                   <TextField editable="false" prefHeight="25.0" prefWidth="409.0" />
-                  <Button fx:id="TipperFolderBrowseButtonFinal" mnemonicParsing="false" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
+                  <Button fx:id="TipperFolderBrowseButtonFinal" mnemonicParsing="false" onAction="#openTipperFolder" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
                </children>
             </HBox>
-            <Button fx:id="FinishButton" layoutX="483.0" layoutY="348.0" mnemonicParsing="false" text="Finish" />
-            <Button fx:id="RestartButton" layoutX="548.0" layoutY="348.0" mnemonicParsing="false" text="Restart" />
+            <Button fx:id="FinishButton" layoutX="483.0" layoutY="348.0" mnemonicParsing="false" onAction="#handleFinish" text="Finish" />
+            <Button fx:id="RestartButton" layoutX="548.0" layoutY="348.0" mnemonicParsing="false" onAction="#handleRestart" text="Restart" />
             <HBox layoutX="443.0" layoutY="298.0" prefHeight="100.0" prefWidth="200.0" />
       </children>
     </AnchorPane>

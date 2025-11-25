@@ -38,29 +38,29 @@
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 
-<VBox prefHeight="400.0" prefWidth="640.0" xmlns="http://javafx.com/javafx/25" xmlns:fx="http://javafx.com/fxml/1">
+<VBox prefHeight="400.0" prefWidth="640.0" xmlns="http://javafx.com/javafx/25" xmlns:fx="http://javafx.com/fxml/1" fx:controller="RenamingAppCode.controllers.FolderSelectionController">
   <children>
     <AnchorPane maxHeight="-1.0" maxWidth="-1.0" prefHeight="-1.0" prefWidth="-1.0" VBox.vgrow="ALWAYS">
       <children>
             <HBox layoutX="36.0" layoutY="105.0" prefHeight="25.0" prefWidth="470.0">
                <children>
-                  <TextField prefHeight="25.0" prefWidth="427.0" text="Select the path to folder containing Video files..." />
-                  <Button mnemonicParsing="false" prefHeight="25.0" prefWidth="79.0" text="Browse" textAlignment="RIGHT" />
+                  <TextField fx:id="videoPathField" prefHeight="25.0" prefWidth="427.0" text="Select the path to folder containing Video files..." />
+                  <Button mnemonicParsing="false" onAction="#browseVideoFolder" prefHeight="25.0" prefWidth="79.0" text="Browse" textAlignment="RIGHT" />
                </children>
             </HBox>
             <HBox layoutX="36.0" layoutY="174.0">
                <children>
-                  <TextField prefHeight="25.0" prefWidth="409.0" text="Select the path to folder containing MAA files..." />
-                  <Button mnemonicParsing="false" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
+                  <TextField fx:id="maaPathField" prefHeight="25.0" prefWidth="409.0" text="Select the path to folder containing MAA files..." />
+                  <Button mnemonicParsing="false" onAction="#browseMAAFolder" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
                </children>
             </HBox>
             <HBox layoutX="36.0" layoutY="246.0">
                <children>
-                  <TextField prefHeight="25.0" prefWidth="409.0" text="Select the path to folder containing Tipper files..." />
-                  <Button mnemonicParsing="false" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
+                  <TextField fx:id="tipperPathField" prefHeight="25.0" prefWidth="409.0" text="Select the path to folder containing Tipper files..." />
+                  <Button mnemonicParsing="false" onAction="#browseTipperFolder" prefHeight="25.0" prefWidth="65.0" text="Browse" textAlignment="RIGHT" />
                </children>
             </HBox>
-            <Button fx:id="renameButton" layoutX="534.0" layoutY="350.0" mnemonicParsing="false" text="Rename Files" />
+            <Button fx:id="renameButton" layoutX="534.0" layoutY="350.0" mnemonicParsing="false" onAction="#handleRenameFiles" text="Rename Files" />
       </children>
     </AnchorPane>
   </children>
