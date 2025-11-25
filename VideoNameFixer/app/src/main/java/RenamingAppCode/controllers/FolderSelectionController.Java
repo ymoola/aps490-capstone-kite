@@ -1,5 +1,6 @@
 package RenamingAppCode.controllers;
 
+import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
@@ -26,94 +27,70 @@ public class FolderSelectionController {
     @FXML
     private Button renameButton;
 
-    private String selectedVideoPath;
-    private String selectedMAAPath;
-    private String selectedTipperPath;
+    // --- Utility to get the current Stage ---
+    private Stage getStage() {
+        return (Stage) renameButton.getScene().getWindow();
+    }
 
-    /**
-     * Browse for video folder
-     */
+    // --- Browse buttons ---
+
     @FXML
-    private void browseVideoFolder() {
-        selectedVideoPath = browseForFolder("Select Video Folder");
-        if (selectedVideoPath != null) {
-            videoPathField.setText(selectedVideoPath);
+    private void handleBrowseVideo(ActionEvent event) {
+        chooseDirectoryIntoField(videoPathField);
+    }
+
+    @FXML
+    private void handleBrowseMaa(ActionEvent event) {
+        chooseDirectoryIntoField(maaPathField);
+    }
+
+    @FXML
+    private void handleBrowseTipper(ActionEvent event) {
+        chooseDirectoryIntoField(tipperPathField);
+    }
+
+    private void chooseDirectoryIntoField(TextField targetField) {
+        DirectoryChooser chooser = new DirectoryChooser();
+        chooser.setTitle("Select folder");
+        File selected = chooser.showDialog(getStage());
+        if (selected != null) {
+            targetField.setText(selected.getAbsolutePath());
         }
     }
 
-    /**
-     * Browse for MAA folder
-     */
+    // --- Rename Files button → go to Confirmation page ---
+
     @FXML
-    private void browseMAAFolder() {
-        selectedMAAPath = browseForFolder("Select MAA Folder");
-        if (selectedMAAPath != null) {
-            maaPathField.setText(selectedMAAPath);
-        }
+    private void handleRenameFiles(ActionEvent event) throws IOException {
+        FXMLLoader loader = new FXMLLoader(
+                getClass().getResource("/fxml/Confirmation.fxml")
+        );
+        Parent root = loader.load();
+
+        // Get the confirmation controller and pass the paths
+        ConfirmationController controller = loader.getController();
+        controller.setPaths(
+                videoPathField.getText(),
+                maaPathField.getText(),
+                tipperPathField.getText()
+        );
+
+        Stage stage = getStage();
+        stage.setScene(new Scene(root));
+        stage.show();
     }
 
-    /**
-     * Browse for Tipper folder
-     */
-    @FXML
-    private void browseTipperFolder() {
-        selectedTipperPath = browseForFolder("Select Tipper Folder");
-        if (selectedTipperPath != null) {
-            tipperPathField.setText(selectedTipperPath);
+    // --- Called when coming back from Confirmation via Edit button ---
+
+    public void setInitialPaths(String video, String maa, String tipper) {
+        if (video != null) {
+            videoPathField.setText(video);
         }
-    }
-
-    /**
-     * Helper method to open directory chooser
-     */
-    private String browseForFolder(String title) {
-        DirectoryChooser directoryChooser = new DirectoryChooser();
-        directoryChooser.setTitle(title);
-
-        Stage stage = (Stage) renameButton.getScene().getWindow();
-        File selectedDirectory = directoryChooser.showDialog(stage);
-
-        if (selectedDirectory != null) {
-            return selectedDirectory.getAbsolutePath();
+        if (maa != null) {
+            maaPathField.setText(maa);
         }
-        return null;
-    }
-
-    /**
-     * Handle rename button click - navigate to Loading page
-     */
-    @FXML
-    private void handleRenameFiles() {
-        try {
-            // Get the paths from text fields
-            selectedVideoPath = videoPathField.getText();
-            selectedMAAPath = maaPathField.getText();
-            selectedTipperPath = tipperPathField.getText();
-
-            // Load the Loading screen
-            FXMLLoader loader = new FXMLLoader(getClass().getResource("/fxml/Loading.fxml"));
-            Parent root = loader.load();
-
-            // Get the Loading controller and pass the folder paths
-            LoadingController loadingController = loader.getController();
-            if (loadingController != null) {
-                loadingController.setFolderPaths(selectedVideoPath, selectedMAAPath, selectedTipperPath);
-                // Start processing after scene is set
-            }
-
-            // Switch to Loading scene
-            Stage stage = (Stage) renameButton.getScene().getWindow();
-            Scene scene = new Scene(root);
-            stage.setScene(scene);
-            stage.show();
-
-            // Start processing after the scene is displayed
-            if (loadingController != null) {
-                loadingController.startProcessing();
-            }
-
-        } catch (IOException e) {
-            e.printStackTrace();
+        if (tipper != null) {
+            tipperPathField.setText(tipper);
         }
     }
 }
