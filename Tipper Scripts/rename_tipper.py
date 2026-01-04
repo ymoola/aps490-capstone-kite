@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 import shutil
 from typing import Dict, Tuple
+from scipy.io import loadmat
+import numpy as np
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--src",
         type=Path,
-        default=Path("OneDrive_2025-11-06/Tipper files"),
+        default=Path("Tipper"),
         help="Source directory containing date folders and .mat files (default: OneDrive_2025-11-06/Tipper files)",
     )
     parser.add_argument(
@@ -65,6 +67,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only copy files that have a CSV angle match (skip unmatched).",
     )
+    parser.add_argument(
+    "--angle-from-mat",
+    action="store_true",
+    help="Derive slope angle by reading the 3rd row of the .mat file instead of using the CSV lookup.",
+    )      
     return parser.parse_args()
 
 
@@ -109,6 +116,39 @@ def load_angle_map(csv_path: Path) -> Dict[str, str]:
             print(f"  ... and {len(duplicates) - 10} more", file=sys.stderr)
 
     return angle_map
+
+def extract_angle_from_mat(mat_path: Path) -> str | None:
+    """
+    Load a MATLAB .mat file and extract the angle from row 3 (index 2),
+    round to nearest integer, and return as string.
+    """
+    try:
+
+        data = loadmat(mat_path)
+
+        # Filter numeric arrays only (ignore __header__, etc.)
+        arrays = [
+            v for v in data.values()
+            if isinstance(v, np.ndarray) and v.ndim == 2
+        ]
+
+        if not arrays:
+            return None
+
+        # Heuristic: take the largest 2D array
+        mat = max(arrays, key=lambda a: a.size)
+
+        if mat.shape[0] < 3:
+            return None
+
+        angle_value = mat[2, 0]  # row 3, first column
+        angle_int = int(round(float(angle_value)))
+        print(f"angle is: {angle_int}")
+        return str(angle_int)
+
+    except Exception as e:
+        print(f"Failed to extract angle from {mat_path.name}: {e}", file=sys.stderr)
+        return None
 
 
 def format_angle_str(angle_raw: str) -> str:
@@ -188,9 +228,10 @@ def main() -> None:
         sys.exit(f"Source folder not found or not a directory: {src_root}")
 
     csv_path: Path = args.csv.resolve()
-    angle_map = load_angle_map(csv_path)
-    if not angle_map:
-        print("Warning: No mappings found in CSV; files will be copied unchanged.", file=sys.stderr)
+    if not args.angle_from_mat:
+        angle_map = load_angle_map(csv_path)
+        if not angle_map:
+            print("Warning: No mappings found in CSV; files will be copied unchanged.", file=sys.stderr)
 
     dst_root: Path = args.dst.resolve() if args.dst else Path(str(src_root) + "_renamed")
 
@@ -212,7 +253,12 @@ def main() -> None:
         rel = path.relative_to(src_root)
         dest_dir = dst_root / rel.parent
         original_name = path.name
-        angle_str = angle_map.get(original_name)
+        
+        if args.angle_from_mat:
+            angle_str = extract_angle_from_mat(path)
+        else:
+            angle_str = angle_map.get(original_name)
+
 
         if angle_str is None and args.only_matched:
             # Skip unmatched when only-matched is requested
