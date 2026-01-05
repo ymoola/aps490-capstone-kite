@@ -1,77 +1,73 @@
 import os
+from pathlib import Path
 import numpy as np
-
-#Parsing files within my OneDrive Folder
-DATA_ROOT = r"C:\Users\archa\UHN\Li, Yue (Sophia) - raw videos to rename the gopro files\videos_renamed"
-video_paths = []
-labels = []
-
-for root, _, files in os.walk(DATA_ROOT):
-    for file in files:
-        if not file.lower().endswith(".mp4"):
-            continue
-
-        full_path = os.path.join(root, file)
-
-        # Label parsing from filename only
-        filename = file.upper()
-
-        if "DP" in filename:
-            label = 1   # P class
-        elif "DF" in filename:
-            label = 0   # F class
-        else:
-            continue  # skip unlabeled files
-
-        video_paths.append(full_path)
-        labels.append(label)
-
-print(f"Found {len(video_paths)} labeled videos")        
-
-#creating our dataset
-
 import pandas as pd
 
+# 1) Get dataset root from environment variable (portable across computers)
+DATA_ROOT = Path(os.environ["WINTERLAB_VIDEO_ROOT"])
+
+# 2) Crawl for videos and parse labels from filename
+video_rel_paths = []
+labels = []
+
+for full_path in DATA_ROOT.rglob("*.mp4"):
+    filename = full_path.name.upper()
+
+    # Label parsing from filename 
+    if "DP" in filename:
+        label = 1
+    elif "DF" in filename:
+        label = 0
+    else:
+        continue  # skip unlabeled files
+
+    # Store RELATIVE path (portable)
+    rel_path = full_path.relative_to(DATA_ROOT).as_posix()
+    video_rel_paths.append(rel_path)
+    labels.append(label)
+
+print(f"Found {len(video_rel_paths)} labeled videos")
+
+# 3) Build dataframe
 df = pd.DataFrame({
-    "video_path": video_paths,
+    "path": video_rel_paths,   # relative to DATA_ROOT
     "label": labels
 })
 
-# Set random seed for reproducibility
-randomSeed = np.random.default_rng(seed=42)
+# 4) Stratified split 
+rng = np.random.default_rng(seed=42)
 
 train_idx, val_idx, test_idx = [], [], []
 
-# Loop through each class to preserve class ratios
-for label in df["label"].unique():
-    cls_idx = df[df["label"] == label].index.to_numpy()
-    randomSeed.shuffle(cls_idx)
+for label in sorted(df["label"].unique()):
+    cls_idx = df.index[df["label"] == label].to_numpy()
+    rng.shuffle(cls_idx)
 
     n = len(cls_idx)
     n_train = int(0.7 * n)
     n_val   = int(0.15 * n)
-    n_test  = n - n_train - n_val  # remaining
 
     train_idx.extend(cls_idx[:n_train])
     val_idx.extend(cls_idx[n_train:n_train + n_val])
     test_idx.extend(cls_idx[n_train + n_val:])
 
-# Create the splits
 train_df = df.loc[train_idx].reset_index(drop=True)
 val_df   = df.loc[val_idx].reset_index(drop=True)
 test_df  = df.loc[test_idx].reset_index(drop=True)
 
-print("Train class distribution:")
+print("\nTrain class distribution:")
 print(train_df["label"].value_counts(normalize=True))
-print("Val class distribution:")
+print("\nVal class distribution:")
 print(val_df["label"].value_counts(normalize=True))
-print("Test class distribution:")
+print("\nTest class distribution:")
 print(test_df["label"].value_counts(normalize=True))
 
+# 5) Output folder (portable): save alongside the script, or inside your repo
+output_dir = Path("BaselineDataset")
+output_dir.mkdir(parents=True, exist_ok=True)
 
-output_dir = r"C:\Users\archa\UHN\Li, Yue (Sophia) - raw videos to rename the gopro files\BaselineDataset"
-os.makedirs(output_dir, exist_ok=True)
+train_df.to_csv(output_dir / "train.csv", index=False)
+val_df.to_csv(output_dir / "val.csv", index=False)
+test_df.to_csv(output_dir / "test.csv", index=False)
 
-train_df.to_csv(os.path.join(output_dir, "train.csv"), index=False)
-val_df.to_csv(os.path.join(output_dir, "val.csv"), index=False)
-test_df.to_csv(os.path.join(output_dir, "test.csv"), index=False)
+print(f"\nSaved splits to: {output_dir.resolve()}")
