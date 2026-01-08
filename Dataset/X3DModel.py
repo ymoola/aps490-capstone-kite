@@ -28,95 +28,22 @@ import pytorchvideo
 # Apply a transform to a dict key (like ApplyTransformToKey)
 # =========================
 
-class ApplyToKey:
-    def __init__(self, key, transform):
-        self.key = key
-        self.transform = transform
-    def __call__(self, x):
-        x[self.key] = self.transform(x[self.key])
-        return x
+from pytorchvideo.transforms import (
+    ApplyTransformToKey,
+    Normalize,
+    RandomShortSideScale,
+    RemoveKey,
+    ShortSideScale,
+    UniformTemporalSubsample
+)
 
-# Temporal subsample on (C, T, H, W)
-class UniformTemporalSubsample:
-    def __init__(self, num_samples: int):
-        self.num_samples = num_samples
-    def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        C, T, H, W = video.shape
-        if T <= self.num_samples:
-            # If clip is short, repeat last frame to reach num_samples (safer than failing)
-            idx = torch.arange(T)
-            if T < self.num_samples:
-                pad = idx.new_full((self.num_samples - T,), T - 1)
-                idx = torch.cat([idx, pad], dim=0)
-            return video[:, idx, :, :]
-        idx = torch.linspace(0, T - 1, self.num_samples).long()
-        return video[:, idx, :, :]
+from torchvision.transforms import (
+    Compose,
+    Lambda,
+    RandomCrop,
+    RandomHorizontalFlip
+)
 
-# Normalize (C, T, H, W) using TF.normalize frame-by-frame
-class VideoNormalize:
-    def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
-    def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        frames = [TF.normalize(video[:, t], self.mean, self.std) for t in range(video.shape[1])]
-        return torch.stack(frames, dim=1)
-
-# Resize each frame so short side = s (random range for train, fixed for val)
-class RandomShortSideScale:
-    def __init__(self, min_size=256, max_size=320):
-        self.min_size = min_size
-        self.max_size = max_size
-    def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        s = int(torch.randint(self.min_size, self.max_size + 1, (1,)).item())
-        return torch.stack([TF.resize(video[:, t], s) for t in range(video.shape[1])], dim=1)
-
-class ShortSideScale:
-    def __init__(self, size=256):
-        self.size = size
-    def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        return torch.stack([TF.resize(video[:, t], self.size) for t in range(video.shape[1])], dim=1)
-
-class RandomCrop:
-    def __init__(self, size=224):
-        self.size = size
-    def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        _, _, H, W = video.shape
-        th, tw = self.size, self.size
-        if H < th or W < tw:
-            # If small, pad (rare, but avoids crashing)
-            pad_h = max(0, th - H)
-            pad_w = max(0, tw - W)
-            video = torch.nn.functional.pad(video, (0, pad_w, 0, pad_h))
-            _, _, H, W = video.shape
-        i = int(torch.randint(0, H - th + 1, (1,)).item())
-        j = int(torch.randint(0, W - tw + 1, (1,)).item())
-        return video[:, :, i:i+th, j:j+tw]
-
-class CenterCrop:
-    def __init__(self, size=224):
-        self.size = size
-    def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        _, _, H, W = video.shape
-        th, tw = self.size, self.size
-        i = max(0, (H - th) // 2)
-        j = max(0, (W - tw) // 2)
-        return video[:, :, i:i+th, j:j+tw]
-
-class RandomHorizontalFlip:
-    def __init__(self, p=0.5):
-        self.p = p
-    def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        if torch.rand(1).item() < self.p:
-            return torch.flip(video, dims=[3])  # flip width
-        return video
-
-class Compose:
-    def __init__(self, transforms):
-        self.transforms = transforms
-    def __call__(self, x):
-        for t in self.transforms:
-            x = t(x)
-        return x
 
 
 # -------------------------
@@ -158,29 +85,55 @@ def load_labeled_video_paths(split_csv_path: Path):
 # 2) Transforms (Tune later)
 # -------------------------
 NUM_FRAMES = 16
-CROP_SIZE = 224
 CLIP_DURATION = 2.0
 
-train_transform = Compose([
-    ApplyToKey("video", Compose([
-        UniformTemporalSubsample(NUM_FRAMES),
-        lambda v: v / 255.0,
-        VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
-        RandomShortSideScale(256, 320),
-        RandomCrop(CROP_SIZE),
-        RandomHorizontalFlip(0.5),
-    ]))
-])
+train_transform = Compose(
+            [
+            ApplyTransformToKey(
+              key="video",
+              transform=Compose(
+                  [
+                    UniformTemporalSubsample(8),
+                    Lambda(lambda x: x / 255.0),
+                    Normalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
+                    RandomShortSideScale(min_size=256, max_size=320),
+                    RandomCrop(244),
+                    RandomHorizontalFlip(p=0.5),
+                  ]
+                ),
+              ),
+            ]
+        )
+val_transform = Compose(
+            [
+            ApplyTransformToKey(
+              key="video",
+              transform=Compose(
+                  [
+                    UniformTemporalSubsample(8),
+                    Lambda(lambda x: x / 255.0),
+                    Normalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
+                  ]
+                ),
+              ),
+            ]
+        )
 
-val_transform = Compose([
-    ApplyToKey("video", Compose([
-        UniformTemporalSubsample(NUM_FRAMES),
-        lambda v: v / 255.0,
-        VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
-        ShortSideScale(256),
-        CenterCrop(CROP_SIZE),
-    ]))
-])
+
+test_transform = Compose(
+            [
+            ApplyTransformToKey(
+              key="video",
+              transform=Compose(
+                  [
+                    UniformTemporalSubsample(8),
+                    Lambda(lambda x: x / 255.0),
+                    Normalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
+                  ]
+                ),
+              ),
+            ]
+        )
 
 
 # -------------------------
@@ -196,7 +149,7 @@ def make_dataset(labeled_video_paths, split: str):
         CLIP_DURATION
     )
 
-    transform = train_transform if split == "train" else val_transform
+    transform = train_transform if split == "train" else val_transform if split == "val" else test_transform
 
     return pytorchvideo.data.LabeledVideoDataset(
         labeled_video_paths=labeled_video_paths,  # list[(video_path_str, label_int)]
@@ -209,7 +162,7 @@ def make_dataset(labeled_video_paths, split: str):
 # -------------------------
 # 4) Build datasets + dataloaders
 # -------------------------
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 NUM_WORKERS = 0  ##changed from 4 to 0 in order for me to run this
 
 train_labeled = load_labeled_video_paths(SPLIT_ROOT / "train.csv")
@@ -281,7 +234,7 @@ print("labels shape:", label.shape)    # expect: (B,)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-scaler = torch.cuda.amp.GradScaler()  # mixed precision on GPU
+scaler = torch.amp.GradScaler()  # mixed precision on GPU
 
 # Training Loop - Accuracy is Clip-level here
 
@@ -298,7 +251,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
         optimizer.zero_grad(set_to_none=True) #reset gradients before computing new ones
 
         # Mixed precision speeds up on GPU
-        with torch.cuda.amp.autocast(enabled=(device.type == "cuda")): #forward pass-run clips through X3D 
+        with torch.amp.autocast(enabled=(device.type == "cuda")): #forward pass-run clips through X3D 
             logits = model(video)
             loss = criterion(logits, label)
 
@@ -321,8 +274,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
 # Validation Loop
 # =========================
 @torch.no_grad() #no gradients are stores
-def eval_one_epoch(model, loader, criterion, device):
-    model.eval()
+def Printeval_one_epoch(model, loader, criterion, device):
     total_loss = 0.0
     correct = 0
     total = 0
@@ -345,8 +297,7 @@ def eval_one_epoch(model, loader, criterion, device):
 #Aggregate predictions per video, e.g.: max probability of slip across clips (good for “slip might occur briefly”) or average
 
 @torch.no_grad()
-def eval_video_level_max(model, loader, device):
-    model.eval()
+def Printeval_video_level_max(model, loader, device):
 
     # store max slip prob per video_index
     max_prob = defaultdict(lambda: 0.0)
@@ -374,13 +325,34 @@ def eval_video_level_max(model, loader, device):
 
     return correct / total if total > 0 else 0.0
 
-
 # =========================
-# Test Loop
+# Test Loop at a Clip Level
 # =========================
 @torch.no_grad()
-def test_video_level_max(model, loader, device, threshold=0.5):
-    model.eval()
+def Printtest_clip_level(model, loader, criterion, device):
+    total_loss = 0.0
+    correct = 0
+    total = 0
+
+    for batch in loader:
+        video = batch["video"].to(device)
+        label = batch["label"].to(device)
+
+        logits = model(video)
+        loss = criterion(logits, label)
+
+        total_loss += loss.item() * video.size(0)
+        preds = logits.argmax(dim=1)
+        correct += (preds == label).sum().item()
+        total += label.size(0)
+
+    return total_loss / total, correct / total
+
+# =========================
+# Test Loop video level
+# =========================
+@torch.no_grad()
+def Printtest_video_level_max(model, loader, device, threshold=0.5):
 
     max_prob = defaultdict(float)
     true_label = {}
@@ -407,34 +379,9 @@ def test_video_level_max(model, loader, device, threshold=0.5):
 
     return correct / total if total > 0 else 0.0
 
-# =========================
-# Test Loop at a Video Level
-# =========================
-@torch.no_grad()
-def test_clip_level(model, loader, criterion, device):
-    model.eval()
-    total_loss = 0.0
-    correct = 0
-    total = 0
-
-    for batch in loader:
-        video = batch["video"].to(device)
-        label = batch["label"].to(device)
-
-        logits = model(video)
-        loss = criterion(logits, label)
-
-        total_loss += loss.item() * video.size(0)
-        preds = logits.argmax(dim=1)
-        correct += (preds == label).sum().item()
-        total += label.size(0)
-
-    return total_loss / total, correct / total
-
-
 # Run training for N epochs 
 
-EPOCHS = 10
+EPOCHS = 2
 
 for epoch in range(1, EPOCHS + 1):
 
@@ -443,13 +390,15 @@ for epoch in range(1, EPOCHS + 1):
         model, train_loader, optimizer, criterion, device
     )
 
+    model.eval() 
+
     # ---- Clip-level validation ----
-    val_loss, val_acc = eval_one_epoch(
+    val_loss, val_acc = Printeval_one_epoch(
         model, val_loader, criterion, device
     )
 
     # ---- Video-level validation ----
-    video_val_acc = eval_video_level_max(
+    video_val_acc = Printeval_video_level_max(
         model, val_loader, device
     )
 
@@ -462,8 +411,9 @@ for epoch in range(1, EPOCHS + 1):
     )
 
 # ---- Final test (RUN ONCE) ----
-test_loss, test_clip_acc = test_clip_level(model, test_loader, criterion, device)
-test_video_acc = test_video_level_max(model, test_loader, device)
+model.test()
+test_loss, test_clip_acc = Printtest_clip_level(model, test_loader, criterion, device)
+test_video_acc = Printtest_video_level_max(model, test_loader, device)
 
 print("FINAL TEST RESULTS")
 print(f"Clip-level accuracy:  {test_clip_acc:.4f}")
