@@ -1,14 +1,16 @@
 import cv2
 import os
-import shutil
-import subprocess
+import json
+import csv
 from ultralytics import YOLO
+from tqdm import tqdm
 
 # --------------------------------------------------
 # Configuration
 # --------------------------------------------------
-DATA_ROOT = "CV/data"
-OUT_ROOT = "CV/out"
+SET_ROOT = "C:/Users/user/Desktop/Github/APS490/aps490-capstone-kite/CV/sets"
+DATA_ROOT = "C:/Users/user/Desktop/Github/APS490/aps490-capstone-kite/CV/data"
+OUT_ROOT = "C:/Users/user/Desktop/Github/APS490/aps490-capstone-kite/CV/out"
 MODEL_PATH = "CV/yolo11x-pose.pt"
 MAX_SIZE_MB = 10
 TEMP_DIR_PREFIX = "_temp_pose_frames"
@@ -22,62 +24,55 @@ VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv",
 def abspath(p: str) -> str:
     return os.path.abspath(os.path.expanduser(p))
 
-def ensure_ffmpeg_available():
-    subprocess.run(
-        ["ffmpeg", "-version"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True
-    )
-
 def iter_videos(root: str):
     for r, _, files in os.walk(root):
         for f in files:
             if os.path.splitext(f)[1] in VIDEO_EXTS:
                 yield os.path.join(r, f)
 
-def compress_to_max_mb(input_path, output_path, duration_sec, max_size_mb):
-    target_bits = max_size_mb * 8 * 1024 * 1024
-    duration_sec = max(duration_sec, 0.1)
-    target_bitrate = int(target_bits / duration_sec)
-
-    target_bitrate = max(150_000, min(target_bitrate, 20_000_000))
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", input_path,
-        "-c:v", "libx264",
-        "-b:v", str(target_bitrate),
-        "-maxrate", str(target_bitrate),
-        "-bufsize", str(target_bitrate * 2),
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        output_path
-    ]
-    subprocess.run(cmd, check=True)
-
 # --------------------------------------------------
 # Main
 # --------------------------------------------------
 def main():
+    set_root = abspath(SET_ROOT)
     data_root = abspath(DATA_ROOT)
     out_root = abspath(OUT_ROOT)
     model_path = abspath(MODEL_PATH)
 
+    if not os.path.isdir(set_root):
+        raise RuntimeError(f"SET_ROOT not found: {set_root}")
     if not os.path.isdir(data_root):
         raise RuntimeError(f"DATA_ROOT not found: {data_root}")
 
+    # Read all CSV files from sets directory
+    all_videos = []
+    for setname in os.listdir(set_root):
+        set_path = os.path.join(set_root, setname)
+        if not set_path.endswith('.csv'):
+            continue
+
+        print(f"Reading set: {setname}")
+        with open(set_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                video_path = os.path.join(data_root, row['path'])
+                label = int(row['label'])
+                all_videos.append({
+                    'path': video_path,
+                    'label': label,
+                    'set': os.path.splitext(setname)[0]  # Remove .csv extension
+                })
+
     os.makedirs(out_root, exist_ok=True)
-    ensure_ffmpeg_available()
 
     model = YOLO(model_path)
 
-    videos = list(iter_videos(data_root))
-    print(f"Found {len(videos)} video(s)")
+    print(f"Found {len(all_videos)} video(s) from CSV files")
 
-    for i, video in enumerate(videos, 1):
-        video_abs = abspath(video)
+    for video_info in tqdm(all_videos, desc="Processing videos"):
+        video_abs = abspath(video_info['path'])
+        label = video_info['label']
+        set_name = video_info['set']
 
         rel_path = os.path.relpath(video_abs, data_root)
         rel_dir = os.path.dirname(rel_path)
@@ -86,25 +81,20 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
 
         name = os.path.splitext(os.path.basename(video_abs))[0]
-        final_video = abspath(os.path.join(out_dir, f"{name}_annotated.mp4"))
+        skeleton_json = abspath(os.path.join(out_dir, f"{set_name}_{name}_skeleton.json"))
 
         # --------------------------------------------------
         # RESTORATIVE CHECK (key addition)
         # --------------------------------------------------
-        if os.path.exists(final_video):
-            print(f"[{i}/{len(videos)}] SKIP (exists): {final_video}")
+        if os.path.exists(skeleton_json):
+            tqdm.write(f"SKIP (exists): {os.path.basename(skeleton_json)}")
             continue
 
-        raw_video = abspath(os.path.join(out_dir, f"{name}_annotated_raw.mp4"))
-        temp_dir = abspath(os.path.join(out_dir, f"{TEMP_DIR_PREFIX}_{name}"))
-
-        print(f"[{i}/{len(videos)}] Processing: {video_abs}")
-        os.makedirs(temp_dir, exist_ok=True)
+        tqdm.write(f"Processing: {os.path.basename(video_abs)} (set: {set_name}, label: {label})")
 
         cap = cv2.VideoCapture(video_abs)
         if not cap.isOpened():
-            print("  !! Failed to open video, skipping")
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            tqdm.write(f"  !! Failed to open video, skipping")
             continue
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -114,68 +104,87 @@ def main():
         duration = frames_total / fps if frames_total else 0.0
 
         # --------------------------------------------------
-        # Pose inference → temp frames
+        # Pose inference → temp frames + skeleton data
         # --------------------------------------------------
         frame_idx = 0
+        skeleton_data = {
+            "data": []
+        }
+
+        # Create progress bar for frames
+        frame_pbar = tqdm(total=frames_total if frames_total > 0 else None,
+                         desc="Frames", leave=False, unit="frame")
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
             result = model(frame)
-            annotated = result[0].plot()
+            frame_pbar.update(1)
 
-            frame_path = abspath(
-                os.path.join(temp_dir, f"frame_{frame_idx:06d}.jpg")
-            )
-            cv2.imwrite(frame_path, annotated)
+            # Extract skeleton keypoints
+            frame_skeletons = []
+            if result[0].keypoints is not None:
+                keypoints = result[0].keypoints
+                for person_idx in range(len(keypoints)):
+                    # Get keypoints for this person (shape: [17, 2] or [17, 3] with confidence)
+                    kpts = keypoints.xy[person_idx].cpu().numpy()
+                    conf = keypoints.conf[person_idx].cpu().numpy() if keypoints.conf is not None else None
+
+                    # Initialize pose and score arrays with zeros (for 18 keypoints)
+                    # YOLO has 17 keypoints, but we'll use 18 to match the format
+                    pose = []
+                    score = []
+
+                    # COCO 17 keypoints - convert to flat array with normalized coordinates
+                    for kpt_idx in range(17):
+                        x, y = kpts[kpt_idx]
+                        c = conf[kpt_idx] if conf is not None else 0.0
+
+                        # Normalize coordinates (divide by width/height)
+                        x_norm = float(x) / width if x > 0 else 0.0
+                        y_norm = float(y) / height if y > 0 else 0.0
+
+                        # Only add if confidence is above threshold, otherwise use 0.0
+                        if c < 0.05:  # Low confidence threshold
+                            pose.extend([0.0, 0.0])
+                            score.append(0.0)
+                        else:
+                            pose.extend([round(x_norm, 3), round(y_norm, 3)])
+                            score.append(round(float(c), 3))
+
+                    # Add 18th keypoint as zeros to match format
+                    pose.extend([0.0, 0.0])
+                    score.append(0.0)
+
+                    person_skeleton = {
+                        "pose": pose,
+                        "score": score
+                    }
+                    frame_skeletons.append(person_skeleton)
+
+            skeleton_data["data"].append({
+                "frame_index": frame_idx + 1,  # 1-indexed
+                "skeleton": frame_skeletons
+            })
+
             frame_idx += 1
 
+        frame_pbar.close()
         cap.release()
 
         if frame_idx == 0:
-            print("  !! No frames read")
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            tqdm.write("  !! No frames read")
             continue
 
-        if duration <= 0:
-            duration = frame_idx / fps
-
         # --------------------------------------------------
-        # Build raw annotated video
+        # Save skeleton JSON
         # --------------------------------------------------
-        vw = cv2.VideoWriter(
-            raw_video,
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            fps,
-            (width, height)
-        )
+        with open(skeleton_json, 'w') as f:
+            json.dump(skeleton_data, f, indent=2)
 
-        for fidx in range(frame_idx):
-            frame_path = abspath(
-                os.path.join(temp_dir, f"frame_{fidx:06d}.jpg")
-            )
-            img = cv2.imread(frame_path)
-            if img is None:
-                raise RuntimeError(f"Missing frame: {frame_path}")
-            vw.write(img)
-
-        vw.release()
-
-        # --------------------------------------------------
-        # Compress
-        # --------------------------------------------------
-        compress_to_max_mb(raw_video, final_video, duration, MAX_SIZE_MB)
-
-        # --------------------------------------------------
-        # Cleanup
-        # --------------------------------------------------
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        if os.path.exists(raw_video):
-            os.remove(raw_video)
-
-        size_mb = os.path.getsize(final_video) / (1024 * 1024)
-        print(f"  ✓ Done ({size_mb:.2f} MB)")
+        tqdm.write(f"  ✓ Done - {frame_idx} frames processed")
 
     print("\nAll videos processed (or skipped).")
 
