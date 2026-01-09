@@ -297,7 +297,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
         optimizer.zero_grad(set_to_none=True) #reset gradients before computing new ones
 
         # Mixed precision speeds up on GPU
-        with torch.amp.autocast(enabled=(device.type == "cuda")): #forward pass-run clips through X3D 
+        with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")): #forward pass-run clips through X3D 
             logits = model(video)
             loss = criterion(logits, label)
 
@@ -329,7 +329,7 @@ def Printeval_one_epoch(model, loader, criterion, device):
         video = batch["video"].to(device, non_blocking=True)
         label = batch["label"].to(device, non_blocking=True)
 
-        with torch.amp.autocast(enabled=(device.type == "cuda")):
+        with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")):
             logits = model(video)
             loss = criterion(logits, label)
 
