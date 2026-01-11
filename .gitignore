@@ -8,7 +8,7 @@ __pycache__/
 
 CV/data/
 CV/out/
-CV/yolo11x-pose.pt
+CV/models/
 
 # Distribution / packaging
 .Python
