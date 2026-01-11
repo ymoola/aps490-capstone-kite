@@ -15,11 +15,12 @@ Any date/sub-folder that cannot be reconciled is reported and skipped.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 @dataclass
@@ -44,8 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--video-root",
         type=Path,
-        default=Path("videos"),
-        help="Root directory that contains date folders for videos (default: videos)",
+        default=Path("/Users/yusufmoola/Library/CloudStorage/OneDrive-UHN/Videos/Test"),
+        help=(
+            "Root directory that contains date folders for videos "
+            "(default: /Users/yusufmoola/Library/CloudStorage/OneDrive-UHN/Videos/Test)"
+        ),
     )
     parser.add_argument(
         "--tipper-root",
@@ -58,6 +62,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("videos_renamed"),
         help="Destination root where renamed videos will be copied (default: videos_renamed)",
+    )
+    parser.add_argument(
+        "--map-dir",
+        type=Path,
+        default=Path("rename_mappings"),
+        help="Directory where mapping json files are written (default: rename_mappings)",
     )
     parser.add_argument(
         "--dry-run",
@@ -278,11 +288,26 @@ def copy_videos(
             print(f"    Copied {video.path.name} -> {target.name}")
 
 
+def write_mapping_file(
+    mapping: Dict[str, str],
+    map_path: Path,
+    overwrite: bool,
+) -> None:
+    if map_path.exists() and not overwrite:
+        print(f"[SKIP] Mapping file already exists: {map_path}")
+        return
+    map_path.parent.mkdir(parents=True, exist_ok=True)
+    with map_path.open("w", encoding="utf-8") as handle:
+        json.dump(mapping, handle, indent=4)
+    print(f"[INFO] Wrote mapping -> {map_path}")
+
+
 def main() -> None:
     args = parse_args()
     video_root = args.video_root.resolve()
     tipper_root = args.tipper_root.resolve()
     dest_root = args.dest_root.resolve()
+    map_root = args.map_dir.resolve()
 
     failed: List[str] = []
 
@@ -293,6 +318,8 @@ def main() -> None:
             print(f"[WARN] No tipper folder for date {date_name}; skipping.")
             failed.append(date_name)
             continue
+        date_mapping: Dict[str, str] = {}
+        date_had_failure = False
         for participant_dir in sorted(p for p in date_dir.iterdir() if p.is_dir()):
             participant = participant_dir.name
             print(f"[INFO] Processing {date_name}/{participant}")
@@ -300,11 +327,13 @@ def main() -> None:
             if not video_records:
                 print("    [WARN] No MP4 videos found; skipping.")
                 failed.append(f"{date_name}/{participant}")
+                date_had_failure = True
                 continue
             tipper_records = collect_tipper_records(tipper_date_dir, participant)
             if not tipper_records:
                 print("    [WARN] No tipper files found; skipping.")
                 failed.append(f"{date_name}/{participant}")
+                date_had_failure = True
                 continue
             if len(tipper_records) < len(video_records):
                 print(
@@ -312,6 +341,7 @@ def main() -> None:
                     f"{len(video_records)} videos."
                 )
                 failed.append(f"{date_name}/{participant}")
+                date_had_failure = True
                 continue
             match, aligned_tippers, log = reconcile_tipper_records(tipper_records, video_records)
             for entry in log:
@@ -322,6 +352,7 @@ def main() -> None:
                     f"(videos={len(video_records)}, tippers={len(aligned_tippers)})."
                 )
                 failed.append(f"{date_name}/{participant}")
+                date_had_failure = True
                 continue
             dest_dir = dest_root / date_name / participant
             copy_videos(
@@ -331,6 +362,20 @@ def main() -> None:
                 dry_run=args.dry_run,
                 overwrite=args.overwrite,
             )
+            for video, tipper in zip(video_records, aligned_tippers):
+                date_mapping[video.path.name] = tipper.path.name
+
+        if date_mapping:
+            if date_had_failure:
+                print(f"[WARN] Mapping for {date_name} is partial due to failures.")
+            map_path = map_root / f"map{date_name}.json"
+            write_mapping_file(
+                date_mapping,
+                map_path,
+                overwrite=args.overwrite,
+            )
+        else:
+            print(f"[WARN] No mappings generated for date {date_name}; skipping map.")
 
     if failed:
         print("\n[WARN] Failed to process the following date/participant folders:")
