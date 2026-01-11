@@ -173,6 +173,8 @@ val_transform = Compose([
         UniformTemporalSubsample(NUM_FRAMES),
         lambda v: v / 255.0,
         VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
+        ShortSideScale(256),
+        CenterCrop(CROP_SIZE),
     ]))
 ])
 
@@ -181,6 +183,8 @@ test_transform = Compose([
         UniformTemporalSubsample(NUM_FRAMES),
         lambda v: v / 255.0,
         VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
+        ShortSideScale(256),
+        CenterCrop(CROP_SIZE),
     ]))
 ])
 
@@ -210,7 +214,7 @@ def make_dataset(labeled_video_paths, split: str):
 # -------------------------
 # 4) Build datasets + dataloaders
 # -------------------------
-BATCH_SIZE = 8
+BATCH_SIZE = 2
 NUM_WORKERS = 0  ##changed from 4 to 0 in order for me to run this
 
 train_labeled = load_labeled_video_paths(SPLIT_ROOT / "train.csv")
@@ -282,7 +286,7 @@ print("labels shape:", label.shape)    # expect: (B,)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-scaler = torch.amp.GradScaler()  # mixed precision on GPU
+scaler = torch.amp.GradScaler(enabled=(device.type == "cuda")) # mixed precision on GPU
 
 # Training Loop - Accuracy is Clip-level here
 
@@ -318,11 +322,45 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
 
     return total_loss / total, correct / total
 
-# =========================
+
+
+@torch.no_grad()
+def eval_video_level_max(model, loader, device, threshold=0.5):
+    """
+    Computes video-level accuracy by taking the max slip probability
+    across all clips belonging to the same video.
+    """
+    model.eval()
+
+    max_prob = defaultdict(float)   # video_index -> max P(slip)
+    true_label = {}                 # video_index -> ground truth label
+
+    for batch in loader:
+        video = batch["video"].to(device, non_blocking=True)
+        labels = batch["label"].cpu()
+        vid_idx = batch["video_index"].cpu().tolist()
+
+        logits = model(video)
+        probs = F.softmax(logits, dim=1)[:, 1].cpu()  # P(slip)
+
+        for i, v in enumerate(vid_idx):
+            max_prob[v] = max(max_prob[v], float(probs[i]))
+            true_label[v] = int(labels[i])
+
+    correct = 0
+    total = 0
+    for v, p in max_prob.items():
+        pred = 1 if p >= threshold else 0
+        correct += (pred == true_label[v])
+        total += 1
+
+    return correct / total if total > 0 else 0.0
+
 # Validation Loop
 # =========================
 @torch.no_grad() #no gradients are stores
 def Printeval_one_epoch(model, loader, criterion, device):
+    model.eval()
     total_loss = 0.0
     correct = 0
     total = 0
@@ -342,106 +380,42 @@ def Printeval_one_epoch(model, loader, criterion, device):
 
     return total_loss / total, correct / total
 
-#Aggregate predictions per video, e.g.: max probability of slip across clips (good for “slip might occur briefly”) or average
-
-@torch.no_grad()
-def Printeval_video_level_max(model, loader, device):
-
-    # store max slip prob per video_index
-    max_prob = defaultdict(lambda: 0.0)
-    true_label = {}
-
-    for batch in loader:
-        video = batch["video"].to(device, non_blocking=True)
-        labels = batch["label"].cpu()
-        vid_idx = batch["video_index"].cpu().tolist()
-
-        logits = model(video)
-        probs = F.softmax(logits, dim=1)[:, 1].detach().cpu()  # prob of class=1 (slip)
-
-        for i, v in enumerate(vid_idx):
-            max_prob[v] = max(max_prob[v], float(probs[i]))
-            true_label[v] = int(labels[i])
-
-    # compute accuracy at video-level using threshold 0.5
-    correct = 0
-    total = 0
-    for v, p in max_prob.items():
-        pred = 1 if p >= 0.5 else 0
-        correct += (pred == true_label[v])
-        total += 1
-
-    return correct / total if total > 0 else 0.0
-
-# =========================
-# Test Loop at a Clip Level
-# =========================
-@torch.no_grad()
-def Printtest_clip_level(model, loader, criterion, device):
-    total_loss = 0.0
-    correct = 0
-    total = 0
-
-    for batch in loader:
-        video = batch["video"].to(device)
-        label = batch["label"].to(device)
-
-        logits = model(video)
-        loss = criterion(logits, label)
-
-        total_loss += loss.item() * video.size(0)
-        preds = logits.argmax(dim=1)
-        correct += (preds == label).sum().item()
-        total += label.size(0)
-
-    return total_loss / total, correct / total
-
-# =========================
-# Test Loop video level
-# =========================
-@torch.no_grad()
-def Printtest_video_level_max(model, loader, device, threshold=0.5):
-
-    max_prob = defaultdict(float)
-    true_label = {}
-
-    for batch in loader:
-        video = batch["video"].to(device)
-        labels = batch["label"].cpu()
-        vid_idx = batch["video_index"].cpu().tolist()
-
-        logits = model(video)
-        probs = F.softmax(logits, dim=1)[:, 1].cpu()  # slip prob
-
-        for i, v in enumerate(vid_idx):
-            max_prob[v] = max(max_prob[v], float(probs[i]))
-            true_label[v] = int(labels[i])
-
-    correct = 0
-    total = 0
-
-    for v, p in max_prob.items():
-        pred = 1 if p >= threshold else 0
-        correct += (pred == true_label[v])
-        total += 1
-
-    return correct / total if total > 0 else 0.0
-
-# Run training for N epochs 
-
-
 EPOCHS = 2
 
 for epoch in range(1, EPOCHS + 1):
 
-    # ---- Train ----
-    train_loss, train_acc = train_one_epoch(
+    
+    # 1) Train (clip-level training)
+    train_loss, train_clip_acc = train_one_epoch(
         model, train_loader, optimizer, criterion, device
     )
 
-    print(f"Epoch {epoch} - Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
+    
+    #Train video-level accuracy (sanity check)
+    train_video_acc = eval_video_level_max(
+        model, train_loader, device
+    )
 
-torch.save(model.state_dict(), "x3d_model.pth")
+    # 3) Validation: clip-level proxy + video-level real metric
+    val_loss, val_clip_acc = Printeval_one_epoch(
+        model, val_loader, criterion, device
+    )
+
+    val_video_acc = eval_video_level_max(
+        model, val_loader, device
+    )
+
+    # 4) Print metrics
+    print(
+        f"Epoch {epoch:02d} | "
+        f"Train loss {train_loss:.4f} CLIP acc {train_clip_acc:.4f} VIDEO acc {train_video_acc:.4f} | "
+        f"Val loss {val_loss:.4f} CLIP acc {val_clip_acc:.4f} VIDEO acc {val_video_acc:.4f}"
+    )
+
+# -------------------------
+# 5) Save final checkpoint
+# -------------------------
+torch.save(model.state_dict(), "x3d_model1.pth")
 print("Training done, model saved.")
 
 
