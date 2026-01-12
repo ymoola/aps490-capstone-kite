@@ -217,3 +217,7 @@ Tipper_Master.csv
 videos/ 
 Tipper/
 videos_renamed/
+MAA/
+direction_results.csv
+maa_parsed.xlsx
+*.xlsx

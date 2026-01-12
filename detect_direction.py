@@ -150,11 +150,11 @@ def iter_videos(video_root: Path) -> Iterator[Tuple[str, str, Path]]:
                 yield date_dir.name, sub_dir.name, video_path
 
 
-def write_csv(csv_path: Path, rows: List[Tuple[str, str, str, str, str]]) -> None:
+def write_csv(csv_path: Path, rows: List[Tuple[str, str, str, str, float, str]]) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["date", "sub", "filename", "direction", "note"])
+        writer.writerow(["date", "sub", "filename", "direction", "duration_sec", "note"])
         writer.writerows(rows)
 
 
@@ -213,7 +213,7 @@ def main() -> None:
     if not args.video_root.exists():
         raise SystemExit(f"Video root not found: {args.video_root}")
 
-    rows: List[Tuple[str, str, str, str, str]] = []
+    rows: List[Tuple[str, str, str, str, float, str]] = []
     for date_name, sub_name, video_path in iter_videos(args.video_root):
         result = detect_movement_result(
             video_path,
@@ -226,6 +226,7 @@ def main() -> None:
 
         direction_label = result.direction.value
         note = result.message
+        duration_sec = round(result.duration_sec, 3)
         if result.error:
             print(f"[ERROR] {video_path}: {result.message}")
         elif result.direction == Direction.UNDETERMINED:
@@ -233,7 +234,7 @@ def main() -> None:
         else:
             print(f"[OK] {video_path}: {direction_label} (avg dx {result.avg_dx:.5f})")
 
-        rows.append((date_name, sub_name, video_path.name, direction_label, note))
+        rows.append((date_name, sub_name, video_path.name, direction_label, duration_sec, note))
 
     write_csv(args.output, rows)
     print(f"Wrote {len(rows)} rows to {args.output}")
