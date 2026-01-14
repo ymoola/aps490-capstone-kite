@@ -1,44 +1,53 @@
 # =========================
-# PyTorchVideo + X3D (Dataset + Dataloaders)
-# OneDrive setup: videos + split CSVs live in OneDrive, paths are portable
+# PyTorchVideo + X3D
+# Video-level classification with multi-instance learning (MIL)
 # Requires env vars:
-#   WINTERLAB_VIDEO_ROOT -> .../videos_renamed (contains date folders)
-#   WINTERLAB_SPLIT_ROOT -> .../BaselineDataset (contains train.csv/val.csv/test.csv)
+# WINTERLAB_VIDEO_ROOT -> .../videos_renamed (contains date folders)
+# WINTERLAB_SPLIT_ROOT -> .../BaselineDataset (contains train.csv/val.csv)
 # =========================
 
 import os
+import random
+import time
+import math
+from dataclasses import dataclass
 from pathlib import Path
+
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from collections import defaultdict
 import torch.utils.data
-import pytorchvideo.data
 import torchvision.transforms.functional as TF
+from dotenv import load_dotenv
+from torch.utils.tensorboard import SummaryWriter
+from pytorchvideo.data.encoded_video import EncodedVideo
+from pytorchvideo.data.encoded_video_pyav import EncodedVideoPyAV
+
+# Load .env file
+load_dotenv()
 
 
 # =========================
-# Apply a transform to a dict key (like ApplyTransformToKey)
+# Transforms
 # =========================
 
 class ApplyToKey:
     def __init__(self, key, transform):
         self.key = key
         self.transform = transform
+
     def __call__(self, x):
         x[self.key] = self.transform(x[self.key])
         return x
-    
 
-# Temporal subsample on (C, T, H, W)
+
 class UniformTemporalSubsample:
     def __init__(self, num_samples: int):
         self.num_samples = num_samples
+
     def __call__(self, video: torch.Tensor) -> torch.Tensor:
-        C, T, H, W = video.shape
+        _, T, _, _ = video.shape
         if T <= self.num_samples:
-            # If clip is short, repeat last frame to reach num_samples (safer than failing)
             idx = torch.arange(T)
             if T < self.num_samples:
                 pad = idx.new_full((self.num_samples - T,), T - 1)
@@ -47,94 +56,129 @@ class UniformTemporalSubsample:
         idx = torch.linspace(0, T - 1, self.num_samples).long()
         return video[:, idx, :, :]
 
-# Normalize (C, T, H, W) using TF.normalize frame-by-frame
+
 class VideoNormalize:
     def __init__(self, mean, std):
         self.mean = mean
         self.std = std
+
     def __call__(self, video: torch.Tensor) -> torch.Tensor:
         frames = [TF.normalize(video[:, t], self.mean, self.std) for t in range(video.shape[1])]
         return torch.stack(frames, dim=1)
 
-# Resize each frame so short side = s (random range for train, fixed for val)
+
 class RandomShortSideScale:
     def __init__(self, min_size=256, max_size=320):
         self.min_size = min_size
         self.max_size = max_size
+
     def __call__(self, video: torch.Tensor) -> torch.Tensor:
         s = int(torch.randint(self.min_size, self.max_size + 1, (1,)).item())
         return torch.stack([TF.resize(video[:, t], s) for t in range(video.shape[1])], dim=1)
 
+
 class ShortSideScale:
     def __init__(self, size=256):
         self.size = size
+
     def __call__(self, video: torch.Tensor) -> torch.Tensor:
         return torch.stack([TF.resize(video[:, t], self.size) for t in range(video.shape[1])], dim=1)
+
 
 class RandomCrop:
     def __init__(self, size=224):
         self.size = size
+
     def __call__(self, video: torch.Tensor) -> torch.Tensor:
         _, _, H, W = video.shape
         th, tw = self.size, self.size
         if H < th or W < tw:
-            # If small, pad (rare, but avoids crashing)
             pad_h = max(0, th - H)
             pad_w = max(0, tw - W)
             video = torch.nn.functional.pad(video, (0, pad_w, 0, pad_h))
             _, _, H, W = video.shape
         i = int(torch.randint(0, H - th + 1, (1,)).item())
         j = int(torch.randint(0, W - tw + 1, (1,)).item())
-        return video[:, :, i:i+th, j:j+tw]
+        return video[:, :, i:i + th, j:j + tw]
+
 
 class CenterCrop:
     def __init__(self, size=224):
         self.size = size
+
     def __call__(self, video: torch.Tensor) -> torch.Tensor:
         _, _, H, W = video.shape
         th, tw = self.size, self.size
         i = max(0, (H - th) // 2)
         j = max(0, (W - tw) // 2)
-        return video[:, :, i:i+th, j:j+tw]
+        return video[:, :, i:i + th, j:j + tw]
+
 
 class RandomHorizontalFlip:
     def __init__(self, p=0.5):
         self.p = p
+
     def __call__(self, video: torch.Tensor) -> torch.Tensor:
         if torch.rand(1).item() < self.p:
-            return torch.flip(video, dims=[3])  # flip width
+            return torch.flip(video, dims=[3])
         return video
+
 
 class Compose:
     def __init__(self, transforms):
         self.transforms = transforms
+
     def __call__(self, x):
         for t in self.transforms:
             x = t(x)
         return x
 
 
-# -------------------------
-# 0) Data Loading Roots (OneDrive approach)
-# -------------------------
+# =========================
+# Config
+# =========================
 
-VIDEO_ROOT = Path(os.environ["WINTERLAB_VIDEO_ROOT"])
-SPLIT_ROOT = Path(os.environ["WINTERLAB_SPLIT_ROOT"])
+@dataclass
+class TrainConfig:
+    num_frames: int = 16
+    crop_size: int = 224
+    clip_duration: float = 2.0
+    clips_per_video: int = 8
+    batch_size: int = 4
+    num_workers: int = 2
+    epochs: int = 5
+    lr: float = 1e-4
+    weight_decay: float = 1e-4
+    num_classes: int = 2
+    pretrained: bool = True
+    mil_pool: str = "logsumexp" # max | mean | logsumexp
+    decoder: str = "pyav"
+    seed: int = 1337
+    log_dir: str = "runs/x3d_slip"
+    save_dir: str = "."
+    run_sanity_check: bool = False
 
-assert VIDEO_ROOT.exists(), f"WINTERLAB_VIDEO_ROOT does not exist: {VIDEO_ROOT}"
-assert (SPLIT_ROOT / "train.csv").exists(), f"train.csv not found in WINTERLAB_SPLIT_ROOT: {SPLIT_ROOT}"
-assert (SPLIT_ROOT / "val.csv").exists(), f"val.csv not found in WINTERLAB_SPLIT_ROOT: {SPLIT_ROOT}"
-assert (SPLIT_ROOT / "test.csv").exists(), f"test.csv not found in WINTERLAB_SPLIT_ROOT: {SPLIT_ROOT}"
+
+# =========================
+# Data
+# =========================
+
+class Div255:
+    """
+    Scales the video tensor from [0, 255] to [0, 1].
+    """
+    def __call__(self, video: torch.Tensor) -> torch.Tensor:
+        return video / 255.0
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
-# -------------------------
-# 1) Load labeled paths from split CSV
-#    CSV format expected: columns ["path", "label"]
-#    where "path" is RELATIVE to VIDEO_ROOT
-# -------------------------
-def load_labeled_video_paths(split_csv_path: Path):
+def load_labeled_video_paths(split_csv_path: Path, video_root: Path):
     df = pd.read_csv(split_csv_path)
-
     if "path" not in df.columns or "label" not in df.columns:
         raise ValueError(f"{split_csv_path} must contain columns: 'path' and 'label'")
 
@@ -142,280 +186,383 @@ def load_labeled_video_paths(split_csv_path: Path):
     for _, row in df.iterrows():
         rel_path = str(row["path"])
         label = int(row["label"])
-
-        full_path = (VIDEO_ROOT / rel_path).as_posix()
-
-        # IMPORTANT: label must be a mapping/dict for this PyTorchVideo version
+        full_path = (video_root / rel_path).as_posix()
         labeled.append((full_path, {"label": label}))
-
     return labeled
 
-# -------------------------
-# 2) Transforms (Tune later)
-# -------------------------
-NUM_FRAMES = 16
-CROP_SIZE = 224
-CLIP_DURATION = 2.0
 
-train_transform = Compose([
-    ApplyToKey("video", Compose([
-        UniformTemporalSubsample(NUM_FRAMES),
-        lambda v: v / 255.0,
-        VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
-        RandomShortSideScale(256, 320),
-        RandomCrop(CROP_SIZE),
-        RandomHorizontalFlip(0.5),
-    ]))
-])
+def build_transforms(cfg: TrainConfig, split: str):
+    if split == "train":
+        return Compose([
+            ApplyToKey("video", Compose([
+                UniformTemporalSubsample(cfg.num_frames),
+                Div255(),
+                VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
+                RandomShortSideScale(256, 320),
+                RandomCrop(cfg.crop_size),
+                RandomHorizontalFlip(0.5),
+            ]))
+        ])
+    return Compose([
+        ApplyToKey("video", Compose([
+            UniformTemporalSubsample(cfg.num_frames),
+            Div255(),
+            VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
+            ShortSideScale(256),
+            CenterCrop(cfg.crop_size),
+        ]))
+    ])
 
-val_transform = Compose([
-    ApplyToKey("video", Compose([
-        UniformTemporalSubsample(NUM_FRAMES),
-        lambda v: v / 255.0,
-        VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
-        ShortSideScale(256),
-        CenterCrop(CROP_SIZE),
-    ]))
-])
 
-test_transform = Compose([
-    ApplyToKey("video", Compose([
-        UniformTemporalSubsample(NUM_FRAMES),
-        lambda v: v / 255.0,
-        VideoNormalize((0.45, 0.45, 0.45), (0.225, 0.225, 0.225)),
-        ShortSideScale(256),
-        CenterCrop(CROP_SIZE),
-    ]))
-])
+def open_encoded_video(path: str, decode_audio: bool, decoder: str):
+    if decoder == "pyav":
+        try:
+            return EncodedVideoPyAV(path, Path(path).name, decode_audio=decode_audio)
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Timed out reading video. If your videos are in OneDrive, "
+                "ensure they are fully downloaded or copy them to a local folder."
+            ) from exc
+        except Exception:
+            return EncodedVideo.from_path(path, decode_audio=decode_audio, decoder=decoder)
+    return EncodedVideo.from_path(path, decode_audio=decode_audio, decoder=decoder)
 
-# -------------------------
-# 3) Make PyTorchVideo dataset 
-#    Train uses random clip sampler, val/test use uniform sampler.
-# -------------------------
-def make_dataset(labeled_video_paths, split: str):
-    if split not in {"train", "val", "test"}:
-        raise ValueError("split must be one of: 'train', 'val', 'test'")
 
-    clip_sampler = pytorchvideo.data.make_clip_sampler(
-        "random" if split == "train" else "uniform",
-        CLIP_DURATION
+class VideoBagDataset(torch.utils.data.Dataset):
+    def __init__(self, labeled_video_paths, clip_duration, num_clips, transform, mode: str, decoder: str):
+        self.labeled_video_paths = labeled_video_paths
+        self.clip_duration = clip_duration
+        self.num_clips = num_clips
+        self.transform = transform
+        self.mode = mode
+        self.decoder = decoder
+
+    def __len__(self):
+        return len(self.labeled_video_paths)
+
+    def _sample_starts(self, duration: float):
+        if duration <= self.clip_duration:
+            return [0.0] * self.num_clips
+
+        max_start = duration - self.clip_duration
+        if self.mode == "train":
+            return [random.uniform(0.0, max_start) for _ in range(self.num_clips)]
+
+        if self.num_clips == 1:
+            return [max_start / 2.0]
+
+        step = max_start / (self.num_clips - 1)
+        return [i * step for i in range(self.num_clips)]
+
+    def __getitem__(self, index):
+        path, label_dict = self.labeled_video_paths[index]
+        label = int(label_dict["label"])
+
+        video = open_encoded_video(path, decode_audio=False, decoder=self.decoder)
+        duration = float(video.duration)
+        starts = self._sample_starts(duration)
+
+        clips = []
+        for start in starts:
+            clip = video.get_clip(start, start + self.clip_duration)
+            if clip is None or clip.get("video") is None:
+                continue
+            clip_video = clip["video"]
+            if self.transform is not None:
+                clip_video = self.transform({"video": clip_video})["video"]
+            clips.append(clip_video)
+
+        if not clips:
+            raise RuntimeError(f"Failed to decode clips for {path}")
+
+        while len(clips) < self.num_clips:
+            clips.append(clips[-1])
+
+        if len(clips) > self.num_clips:
+            clips = clips[:self.num_clips]
+
+        return {
+            "video": torch.stack(clips, dim=0),
+            "label": torch.tensor(label, dtype=torch.long),
+            "video_index": torch.tensor(index, dtype=torch.long),
+            "video_name": Path(path).name,
+        }
+
+
+# =========================
+# Model
+# =========================
+
+def build_model(cfg: TrainConfig):
+    model = torch.hub.load(
+        "facebookresearch/pytorchvideo",
+        "x3d_s",
+        pretrained=cfg.pretrained,
     )
 
-    transform = train_transform if split == "train" else val_transform if split == "val" else test_transform
+    # Freeze entire backbone
+    for p in model.parameters():
+        p.requires_grad = False
 
-    return pytorchvideo.data.LabeledVideoDataset(
-        labeled_video_paths=labeled_video_paths,  # list[(video_path_str, label_int)]
-        clip_sampler=clip_sampler,
-        decode_audio=False,
-        transform=transform,
-    )
+    # Replace classifier head
+    in_features = model.blocks[-1].proj.in_features
+    model.blocks[-1].proj = nn.Linear(in_features, cfg.num_classes)
 
+    # Unfreeze classifier head
+    for p in model.blocks[-1].proj.parameters():
+        p.requires_grad = True
 
-# -------------------------
-# 4) Build datasets + dataloaders
-# -------------------------
-BATCH_SIZE = 2
-NUM_WORKERS = 0  ##changed from 4 to 0 in order for me to run this
+    # Remove activation if present
+    if hasattr(model.blocks[-1], "activation"):
+        model.blocks[-1].activation = nn.Identity()
 
-train_labeled = load_labeled_video_paths(SPLIT_ROOT / "train.csv")
-val_labeled   = load_labeled_video_paths(SPLIT_ROOT / "val.csv")
-test_labeled  = load_labeled_video_paths(SPLIT_ROOT / "test.csv")
-
-train_ds = make_dataset(train_labeled, split="train")
-val_ds   = make_dataset(val_labeled, split="val")
-test_ds  = make_dataset(test_labeled, split="test")
-
-train_loader = torch.utils.data.DataLoader(train_ds, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS)
-val_loader   = torch.utils.data.DataLoader(val_ds, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS)
-test_loader  = torch.utils.data.DataLoader(test_ds, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS)
+    return model
 
 
-# -------------------------
-# 5) Sanity check one batch
-# -------------------------
-
-batch = next(iter(train_loader))
-
-print("Batch keys:", batch.keys())
-print("video shape:", batch["video"].shape)   # (B, C, T, H, W)
-print("label shape:", batch["label"].shape)   # (B,)
-print("labels:", batch["label"])
-print("video_name (first 2):", batch["video_name"][:2])
-
-# =========================
-# Done Data Pipeline - confirm code runs sucessfully above this line 
-# =========================
-
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# ---- Load pretrained X3D-S ----
-# This uses torch.hub to fetch the model definition + weights.
-# If this fails due to network restrictions, set pretrained=False.
-model = torch.hub.load(
-    "facebookresearch/pytorchvideo",
-    "x3d_s",
-    pretrained=True
-)
-
-num_classes = 2 #two-foot slip vs no slip
-in_features = model.blocks[-1].proj.in_features
-model.blocks[-1].proj = nn.Linear(in_features, num_classes) #overwrite previous classifier
-
-# =========================
-# Sanity Check forward pass to confirm that the model, data, and GPU setup work before training.
-# =========================
-
-model = model.to(device)
-model.train()  # training mode
-
-batch = next(iter(train_loader))
-video = batch["video"].to(device)   # (B, C, T, H, W)
-label = batch["label"].to(device)   # (B,)
-
-with torch.no_grad():
-    logits = model(video)
-
-print("logits shape:", logits.shape)   # expect: (B, 2)
-print("labels shape:", label.shape)    # expect: (B,)
 
 
 # =========================
-# Loss + Optimizer
+# MIL + Training
 # =========================
 
-criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-scaler = torch.amp.GradScaler(enabled=(device.type == "cuda")) # mixed precision on GPU
+def mil_pool(clip_logits: torch.Tensor, method: str) -> torch.Tensor:
+    if method == "max":
+        return clip_logits.max(dim=1).values
+    if method == "mean":
+        return clip_logits.mean(dim=1)
+    if method == "logsumexp":
+        return torch.logsumexp(clip_logits, dim=1) - math.log(clip_logits.size(1))
+    raise ValueError(f"Unsupported MIL pool: {method}")
 
-# Training Loop - Accuracy is Clip-level here
 
-def train_one_epoch(model, loader, optimizer, criterion, device):
+def forward_batch(model, batch, device):
+    non_blocking = device.type == "cuda"
+    video = batch["video"].to(device, non_blocking=non_blocking)
+    labels = batch["label"].to(device, non_blocking=non_blocking)
+    b, k, c, t, h, w = video.shape
+    clip_logits = model(video.flatten(0, 1))
+    return clip_logits.view(b, k, -1), labels
+
+
+def train_one_epoch(model, loader, optimizer, criterion, device, cfg: TrainConfig, scaler, amp_device, amp_enabled):
     model.train()
-    total_loss = 0.0
-    correct = 0
-    total = 0
+    loss_sum = 0.0
+    video_correct = 0
+    video_total = 0
 
     for batch in loader:
-        video = batch["video"].to(device, non_blocking=True)
-        label = batch["label"].to(device, non_blocking=True)
+        optimizer.zero_grad(set_to_none=True)
 
-        optimizer.zero_grad(set_to_none=True) #reset gradients before computing new ones
+        with torch.amp.autocast(device_type=amp_device, enabled=amp_enabled):
+            clip_logits, labels = forward_batch(model, batch, device)
+            video_logits = mil_pool(clip_logits, cfg.mil_pool)
+            loss = criterion(video_logits, labels)
 
-        # Mixed precision speeds up on GPU
-        with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")):
-            logits = model(video)
-            loss = criterion(logits, label)
-
-        if device.type == "cuda": #GPU
+        if device.type == "cuda":
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-        else: #CPU
+        else:
             loss.backward()
             optimizer.step()
 
-        total_loss += loss.item() * video.size(0) #Update Metrics
-        preds = logits.argmax(dim=1)
-        correct += (preds == label).sum().item()
-        total += label.size(0)
+        loss_sum += loss.item() * labels.size(0)
+        preds = video_logits.argmax(dim=1)
+        video_correct += (preds == labels).sum().item()
+        video_total += labels.size(0)
 
-    return total_loss / total, correct / total
-
+    avg_loss = loss_sum / video_total if video_total else 0.0
+    video_acc = video_correct / video_total if video_total else 0.0
+    return avg_loss, video_acc
 
 
 @torch.no_grad()
-def eval_video_level_max(model, loader, device, threshold=0.5):
-    """
-    Computes video-level accuracy by taking the max slip probability
-    across all clips belonging to the same video.
-    """
+def eval_one_epoch(model, loader, criterion, device, cfg: TrainConfig, amp_device, amp_enabled):
     model.eval()
-
-    max_prob = defaultdict(float)   # video_index -> max P(slip)
-    true_label = {}                 # video_index -> ground truth label
+    loss_sum = 0.0
+    video_correct = 0
+    video_total = 0
 
     for batch in loader:
-        video = batch["video"].to(device, non_blocking=True)
-        labels = batch["label"].cpu()
-        vid_idx = batch["video_index"].cpu().tolist()
+        with torch.amp.autocast(device_type=amp_device, enabled=amp_enabled):
+            clip_logits, labels = forward_batch(model, batch, device)
+            video_logits = mil_pool(clip_logits, cfg.mil_pool)
+            loss = criterion(video_logits, labels)
 
-        logits = model(video)
-        probs = F.softmax(logits, dim=1)[:, 1].cpu()  # P(slip)
+        loss_sum += loss.item() * labels.size(0)
+        preds = video_logits.argmax(dim=1)
+        video_correct += (preds == labels).sum().item()
+        video_total += labels.size(0)
 
-        for i, v in enumerate(vid_idx):
-            max_prob[v] = max(max_prob[v], float(probs[i]))
-            true_label[v] = int(labels[i])
+    avg_loss = loss_sum / video_total if video_total else 0.0
+    video_acc = video_correct / video_total if video_total else 0.0
+    return avg_loss, video_acc
 
-    correct = 0
-    total = 0
-    for v, p in max_prob.items():
-        pred = 1 if p >= threshold else 0
-        correct += (pred == true_label[v])
-        total += 1
 
-    return correct / total if total > 0 else 0.0
+def save_checkpoint(path: Path, model, optimizer, epoch: int, metrics: dict, cfg: TrainConfig):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "metrics": metrics,
+            "config": cfg.__dict__,
+        },
+        path,
+    )
 
-# Validation Loop
+
 # =========================
-@torch.no_grad() #no gradients are stores
-def Printeval_one_epoch(model, loader, criterion, device):
-    model.eval()
-    total_loss = 0.0
-    correct = 0
-    total = 0
+# Main
+# =========================
 
-    for batch in loader:
-        video = batch["video"].to(device, non_blocking=True)
-        label = batch["label"].to(device, non_blocking=True)
+def main():
+    cfg = TrainConfig()
+    set_seed(cfg.seed)
 
-        with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")):
-            logits = model(video)
-            loss = criterion(logits, label)
+    video_root = Path(os.environ["WINTERLAB_VIDEO_ROOT"])
+    split_root = Path(os.environ["WINTERLAB_SPLIT_ROOT"])
 
-        total_loss += loss.item() * video.size(0)
-        preds = logits.argmax(dim=1)
-        correct += (preds == label).sum().item()
-        total += label.size(0)
+    assert video_root.exists(), f"WINTERLAB_VIDEO_ROOT does not exist: {video_root}"
+    assert (split_root / "train.csv").exists(), f"train.csv not found in WINTERLAB_SPLIT_ROOT: {split_root}"
+    assert (split_root / "val.csv").exists(), f"val.csv not found in WINTERLAB_SPLIT_ROOT: {split_root}"
 
-    return total_loss / total, correct / total
+    train_labeled = load_labeled_video_paths(split_root / "train.csv", video_root)
+    val_labeled = load_labeled_video_paths(split_root / "val.csv", video_root)
 
-EPOCHS = 2
-
-for epoch in range(1, EPOCHS + 1):
-
-    
-    # 1) Train (clip-level training)
-    train_loss, train_clip_acc = train_one_epoch(
-        model, train_loader, optimizer, criterion, device
+    print("Collected data")
+    train_ds = VideoBagDataset(
+        train_labeled,
+        clip_duration=cfg.clip_duration,
+        num_clips=cfg.clips_per_video,
+        transform=build_transforms(cfg, "train"),
+        mode="train",
+        decoder=cfg.decoder,
+    )
+    val_ds = VideoBagDataset(
+        val_labeled,
+        clip_duration=cfg.clip_duration,
+        num_clips=cfg.clips_per_video,
+        transform=build_transforms(cfg, "val"),
+        mode="val",
+        decoder=cfg.decoder,
     )
 
-    
-    #Train video-level accuracy (sanity check)
-    train_video_acc = eval_video_level_max(
-        model, train_loader, device
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("CUDA device found. Using GPU.")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+        print("MPS device found. Using GPU.")
+    else:
+        device = torch.device("cpu")
+        print("No GPU found. Using CPU.")
+
+    pin_memory = device.type == "cuda"
+    generator = torch.Generator().manual_seed(cfg.seed)
+
+    print("Performing data loader...")
+
+    train_loader = torch.utils.data.DataLoader(
+        train_ds,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+        pin_memory=pin_memory,
+        generator=generator,
     )
-
-    # 3) Validation: clip-level proxy + video-level real metric
-    val_loss, val_clip_acc = Printeval_one_epoch(
-        model, val_loader, criterion, device
+    val_loader = torch.utils.data.DataLoader(
+        val_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=pin_memory,
     )
+    if cfg.run_sanity_check:
+        batch = next(iter(train_loader))
+        print("Batch video shape:", batch["video"].shape)
+        print("Batch label shape:", batch["label"].shape)
+        print("Video name (first):", batch["video_name"][0])
 
-    val_video_acc = eval_video_level_max(
-        model, val_loader, device
-    )
+    print("building model...")
+    model = build_model(cfg).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
+    amp_enabled = device.type == "cuda"
+    amp_device = "cuda" if amp_enabled else "cpu"
 
-    # 4) Print metrics
-    print(
-        f"Epoch {epoch:02d} | "
-        f"Train loss {train_loss:.4f} CLIP acc {train_clip_acc:.4f} VIDEO acc {train_video_acc:.4f} | "
-        f"Val loss {val_loss:.4f} CLIP acc {val_clip_acc:.4f} VIDEO acc {val_video_acc:.4f}"
-    )
+    writer = SummaryWriter(log_dir=cfg.log_dir)
 
-# -------------------------
-# 5) Save final checkpoint
-# -------------------------
-torch.save(model.state_dict(), "x3d_model1.pth")
-print("Training done, model saved.")
+    best_val_acc = -1.0
+    start_time = time.perf_counter()
+
+    print("starting training...")
+
+    for epoch in range(1, cfg.epochs + 1):
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elif device.type == "mps" and hasattr(torch, "mps"):
+            torch.mps.synchronize()
+
+        train_start = time.perf_counter()
+        train_loss, train_video_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion, device, cfg, scaler, amp_device, amp_enabled
+        )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elif device.type == "mps" and hasattr(torch, "mps"):
+            torch.mps.synchronize()
+        train_time = time.perf_counter() - train_start
+
+        eval_start = time.perf_counter()
+        val_loss, val_video_acc = eval_one_epoch(
+            model, val_loader, criterion, device, cfg, amp_device, amp_enabled
+        )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elif device.type == "mps" and hasattr(torch, "mps"):
+            torch.mps.synchronize()
+        eval_time = time.perf_counter() - eval_start
+        epoch_time = train_time + eval_time
+
+        writer.add_scalar("loss/train", train_loss, epoch)
+        writer.add_scalar("loss/val", val_loss, epoch)
+        writer.add_scalar("acc/train_video", train_video_acc, epoch)
+        writer.add_scalar("acc/val_video", val_video_acc, epoch)
+        writer.add_scalar("time/train_sec", train_time, epoch)
+        writer.add_scalar("time/val_sec", eval_time, epoch)
+        writer.add_scalar("time/epoch_sec", epoch_time, epoch)
+
+        print(
+            f"Epoch {epoch:02d} | "
+            f"Train loss {train_loss:.4f} VIDEO acc {train_video_acc:.4f} | "
+            f"Val loss {val_loss:.4f} VIDEO acc {val_video_acc:.4f} | "
+            f"Time train {train_time:.1f}s eval {eval_time:.1f}s total {epoch_time:.1f}s"
+        )
+
+        metrics = {
+            "train_loss": train_loss,
+            "train_video_acc": train_video_acc,
+            "val_loss": val_loss,
+            "val_video_acc": val_video_acc,
+        }
+
+        last_path = Path(cfg.save_dir) / "x3d_last.pth"
+        save_checkpoint(last_path, model, optimizer, epoch, metrics, cfg)
+
+        if val_video_acc > best_val_acc:
+            best_val_acc = val_video_acc
+            best_path = Path(cfg.save_dir) / "x3d_best.pth"
+            save_checkpoint(best_path, model, optimizer, epoch, metrics, cfg)
+
+    total_time = time.perf_counter() - start_time
+    writer.add_scalar("time/total_sec", total_time, cfg.epochs)
+    writer.close()
+
+    print(f"Training complete in {total_time:.1f}s")
 
 
+if __name__ == "__main__":
+    main()
