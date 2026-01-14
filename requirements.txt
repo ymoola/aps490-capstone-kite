@@ -4,3 +4,5 @@ torchaudio
 pytorchvideo
 dotenv
 tensorboard
+scikit-learn
+matplotlib

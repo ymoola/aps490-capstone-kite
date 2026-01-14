@@ -219,3 +219,6 @@ MAA/
 direction_results.csv
 maa_parsed.xlsx
 *.xlsx
+runs/
+pytorch files/
+tensorboard_folders/
