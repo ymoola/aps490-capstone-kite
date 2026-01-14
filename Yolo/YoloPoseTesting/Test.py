@@ -1,15 +1,21 @@
+import os
 from ultralytics import YOLO
 import numpy as np
 
 # Load trained model
-model_path = r"C:\Capstone\Yolo\YoloPoseTesting\runs\classify\train2\weights\best.pt"
+
+model_path = "C:\\Capstone\\aps490-capstone-kite\\Yolo\\YoloPoseTesting\\runs\\classify\\train2\\weights\\best.pt"
+if os.path.isfile(model_path):
+    print("File exists")
+else:
+    print("File NOT found")
 model = YOLO(model_path)
 
 #class index for "two_foot"
 two_foot_idx = 1
 
 # Path to video
-video_path = r"C:\Capstone\Yolo\YoloPoseTesting\dataset\test\two_foot\GX011493.mp4"
+video_path = "C:\\Capstone\\aps490-capstone-kite\\Yolo\\YoloPoseTesting\\dataset\\test\\no_two_foot\\GX011782.mp4"
 
 frame_probs = []
 

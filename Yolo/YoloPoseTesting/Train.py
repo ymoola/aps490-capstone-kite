@@ -10,7 +10,7 @@ model = YOLO("yolov8n-cls.pt")
 
 results = model.train(
     data=r"C:\Capstone\Yolo\YoloPoseTesting\dataset\train",  # path to folder with class subfolders
-    epochs=2,    # start with 2, you can adjust later
+    epochs=2,    # start with 2
     imgsz=320,    # smaller image size → faster training
     batch=2       # small batch for CPU
 )
