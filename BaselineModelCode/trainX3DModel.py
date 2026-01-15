@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.utils.data
@@ -157,6 +158,8 @@ class TrainConfig:
     log_dir: str = "runs/x3d_slip"
     save_dir: str = "."
     run_sanity_check: bool = False
+    log_plots: bool = True
+    log_plots_every: int = 1
 
 
 # =========================
@@ -335,6 +338,142 @@ def mil_pool(clip_logits: torch.Tensor, method: str) -> torch.Tensor:
     raise ValueError(f"Unsupported MIL pool: {method}")
 
 
+def compute_binary_metrics(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5):
+    labels = labels.astype(np.int64)
+    probs = probs.astype(np.float64)
+    preds = (probs >= threshold).astype(np.int64)
+
+    tp = int(((preds == 1) & (labels == 1)).sum())
+    tn = int(((preds == 0) & (labels == 0)).sum())
+    fp = int(((preds == 1) & (labels == 0)).sum())
+    fn = int(((preds == 0) & (labels == 1)).sum())
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    balanced_acc = 0.5 * (recall + specificity)
+    acc = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
+
+    denom = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+    mcc = ((tp * tn - fp * fn) / denom) if denom > 0 else 0.0
+    brier = float(np.mean((probs - labels) ** 2)) if labels.size > 0 else 0.0
+
+    pos = labels.sum()
+    neg = labels.size - pos
+    if pos == 0 or neg == 0:
+        roc_auc = float("nan")
+        pr_auc = float("nan")
+    else:
+        order = np.argsort(-probs)
+        labels_sorted = labels[order]
+        tps = np.cumsum(labels_sorted)
+        fps = np.cumsum(1 - labels_sorted)
+        tpr = tps / pos
+        fpr = fps / neg
+        tpr = np.concatenate([[0.0], tpr, [1.0]])
+        fpr = np.concatenate([[0.0], fpr, [1.0]])
+        roc_auc = float(np.trapz(tpr, fpr))
+
+        precision_curve = tps / (tps + fps + 1e-12)
+        recall_curve = tps / pos
+        recall_curve = np.concatenate([[0.0], recall_curve, [1.0]])
+        precision_curve = np.concatenate([[1.0], precision_curve, [0.0]])
+        pr_auc = float(np.trapz(precision_curve, recall_curve))
+
+    return {
+        "acc": acc,
+        "precision": precision,
+        "recall": recall,
+        "specificity": specificity,
+        "f1": f1,
+        "balanced_acc": balanced_acc,
+        "mcc": mcc,
+        "brier": brier,
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+    }
+
+
+def compute_class_weights(labeled_video_paths, num_classes: int) -> torch.Tensor:
+    counts = torch.zeros(num_classes, dtype=torch.long)
+    for _, label_dict in labeled_video_paths:
+        label = int(label_dict["label"])
+        if label < 0 or label >= num_classes:
+            raise ValueError(f"Label {label} out of range [0, {num_classes - 1}]")
+        counts[label] += 1
+    counts = counts.clamp(min=1)
+    total = counts.sum().float()
+    weights = total / (counts.float() * num_classes)
+    return weights
+
+
+def log_eval_plots(writer, labels: np.ndarray, probs: np.ndarray, epoch: int):
+    try:
+        from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix, auc   
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+
+    if labels.size == 0:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    fig.suptitle("Validation Metrics")
+
+    # ROC curve
+    if len(np.unique(labels)) > 1:
+        fpr, tpr, _ = roc_curve(labels, probs)
+        roc_auc = auc(fpr, tpr)
+        axes[0].plot(fpr, tpr, label=f"AUC={roc_auc:.3f}")
+        axes[0].plot([0, 1], [0, 1], linestyle="--", color="gray")
+        axes[0].set_title("ROC")
+        axes[0].set_xlabel("FPR")
+        axes[0].set_ylabel("TPR")
+        axes[0].legend(loc="lower right")
+    else:
+        axes[0].set_title("ROC (n/a)")
+        axes[0].text(0.5, 0.5, "Single class", ha="center", va="center")
+        axes[0].set_axis_off()
+
+    # PR curve
+    if len(np.unique(labels)) > 1:
+        precision, recall, _ = precision_recall_curve(labels, probs)
+        pr_auc = auc(recall, precision)
+        axes[1].plot(recall, precision, label=f"AUC={pr_auc:.3f}")
+        axes[1].set_title("PR")
+        axes[1].set_xlabel("Recall")
+        axes[1].set_ylabel("Precision")
+        axes[1].legend(loc="lower left")
+    else:
+        axes[1].set_title("PR (n/a)")
+        axes[1].text(0.5, 0.5, "Single class", ha="center", va="center")
+        axes[1].set_axis_off()
+
+    # Confusion matrix
+    preds = (probs >= 0.5).astype(np.int64)
+    cm = confusion_matrix(labels, preds, labels=[0, 1])
+    im = axes[2].imshow(cm, cmap="Blues")
+    axes[2].set_title("Confusion")
+    axes[2].set_xlabel("Pred")
+    axes[2].set_ylabel("True")
+    axes[2].set_xticks([0, 1])
+    axes[2].set_yticks([0, 1])
+    for (i, j), val in np.ndenumerate(cm):
+        axes[2].text(j, i, str(val), ha="center", va="center", color="black")
+    fig.colorbar(im, ax=axes[2], fraction=0.046, pad=0.04)
+
+    fig.tight_layout()
+    writer.add_figure("val/curves", fig, epoch)
+    plt.close(fig)
+
+
 def forward_batch(model, batch, device):
     non_blocking = device.type == "cuda"
     video = batch["video"].to(device, non_blocking=non_blocking)
@@ -382,6 +521,8 @@ def eval_one_epoch(model, loader, criterion, device, cfg: TrainConfig, amp_devic
     loss_sum = 0.0
     video_correct = 0
     video_total = 0
+    all_labels = []
+    all_probs = []
 
     for batch in loader:
         with torch.amp.autocast(device_type=amp_device, enabled=amp_enabled):
@@ -393,10 +534,16 @@ def eval_one_epoch(model, loader, criterion, device, cfg: TrainConfig, amp_devic
         preds = video_logits.argmax(dim=1)
         video_correct += (preds == labels).sum().item()
         video_total += labels.size(0)
+        probs = torch.softmax(video_logits, dim=1)[:, 1]
+        all_labels.append(labels.detach().cpu())
+        all_probs.append(probs.detach().cpu())
 
     avg_loss = loss_sum / video_total if video_total else 0.0
     video_acc = video_correct / video_total if video_total else 0.0
-    return avg_loss, video_acc
+    labels_np = torch.cat(all_labels).numpy() if all_labels else np.array([])
+    probs_np = torch.cat(all_probs).numpy() if all_probs else np.array([])
+    metrics = compute_binary_metrics(labels_np, probs_np)
+    return avg_loss, video_acc, metrics, labels_np, probs_np
 
 
 def save_checkpoint(path: Path, model, optimizer, epoch: int, metrics: dict, cfg: TrainConfig):
@@ -487,7 +634,9 @@ def main():
 
     print("building model...")
     model = build_model(cfg).to(device)
-    criterion = nn.CrossEntropyLoss()
+    class_weights = compute_class_weights(train_labeled, cfg.num_classes).to(device)
+    print("Class weights:", class_weights.tolist())
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
     amp_enabled = device.type == "cuda"
@@ -517,7 +666,7 @@ def main():
         train_time = time.perf_counter() - train_start
 
         eval_start = time.perf_counter()
-        val_loss, val_video_acc = eval_one_epoch(
+        val_loss, val_video_acc, val_metrics, val_labels, val_probs = eval_one_epoch(
             model, val_loader, criterion, device, cfg, amp_device, amp_enabled
         )
         if device.type == "cuda":
@@ -527,18 +676,33 @@ def main():
         eval_time = time.perf_counter() - eval_start
         epoch_time = train_time + eval_time
 
-        writer.add_scalar("loss/train", train_loss, epoch)
-        writer.add_scalar("loss/val", val_loss, epoch)
-        writer.add_scalar("acc/train_video", train_video_acc, epoch)
-        writer.add_scalar("acc/val_video", val_video_acc, epoch)
+        writer.add_scalars("loss", {"train": train_loss, "val": val_loss}, epoch)
+        writer.add_scalars("acc/video", {"train": train_video_acc, "val": val_video_acc}, epoch)
         writer.add_scalar("time/train_sec", train_time, epoch)
         writer.add_scalar("time/val_sec", eval_time, epoch)
         writer.add_scalar("time/epoch_sec", epoch_time, epoch)
+        writer.add_scalar("val/precision", val_metrics["precision"], epoch)
+        writer.add_scalar("val/recall", val_metrics["recall"], epoch)
+        writer.add_scalar("val/specificity", val_metrics["specificity"], epoch)
+        writer.add_scalar("val/f1", val_metrics["f1"], epoch)
+        writer.add_scalar("val/balanced_acc", val_metrics["balanced_acc"], epoch)
+        writer.add_scalar("val/mcc", val_metrics["mcc"], epoch)
+        writer.add_scalar("val/brier", val_metrics["brier"], epoch)
+        if not np.isnan(val_metrics["roc_auc"]):
+            writer.add_scalar("val/roc_auc", val_metrics["roc_auc"], epoch)
+        if not np.isnan(val_metrics["pr_auc"]):
+            writer.add_scalar("val/pr_auc", val_metrics["pr_auc"], epoch)
+        writer.add_scalar("val/confusion/tp", val_metrics["tp"], epoch)
+        writer.add_scalar("val/confusion/tn", val_metrics["tn"], epoch)
+        writer.add_scalar("val/confusion/fp", val_metrics["fp"], epoch)
+        writer.add_scalar("val/confusion/fn", val_metrics["fn"], epoch)
+        if cfg.log_plots and (epoch % cfg.log_plots_every == 0):
+            log_eval_plots(writer, val_labels, val_probs, epoch)
 
         print(
             f"Epoch {epoch:02d} | "
             f"Train loss {train_loss:.4f} VIDEO acc {train_video_acc:.4f} | "
-            f"Val loss {val_loss:.4f} VIDEO acc {val_video_acc:.4f} | "
+            f"Val loss {val_loss:.4f} VIDEO acc {val_video_acc:.4f} F1 {val_metrics['f1']:.4f} | "
             f"Time train {train_time:.1f}s eval {eval_time:.1f}s total {epoch_time:.1f}s"
         )
 
@@ -547,6 +711,19 @@ def main():
             "train_video_acc": train_video_acc,
             "val_loss": val_loss,
             "val_video_acc": val_video_acc,
+            "val_precision": val_metrics["precision"],
+            "val_recall": val_metrics["recall"],
+            "val_specificity": val_metrics["specificity"],
+            "val_f1": val_metrics["f1"],
+            "val_balanced_acc": val_metrics["balanced_acc"],
+            "val_mcc": val_metrics["mcc"],
+            "val_brier": val_metrics["brier"],
+            "val_roc_auc": val_metrics["roc_auc"],
+            "val_pr_auc": val_metrics["pr_auc"],
+            "val_tp": val_metrics["tp"],
+            "val_tn": val_metrics["tn"],
+            "val_fp": val_metrics["fp"],
+            "val_fn": val_metrics["fn"],
         }
 
         last_path = Path(cfg.save_dir) / "x3d_last.pth"
