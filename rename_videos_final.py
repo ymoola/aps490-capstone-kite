@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import cv2  # noqa: F401 - imported for detect_direction
 import numpy as np
 from scipy.io import loadmat
 
@@ -90,7 +89,9 @@ def parse_tipper_file(path: Path) -> Optional[TipperInfo]:
     angle = parse_float(parts[3]) if len(parts) >= 4 else None
     if angle is None:
         angle_str = extract_angle_from_mat(path)
-        angle = float(angle_str) if angle_str is not None else None
+        if angle_str is not None:
+            angle = float(angle_str)
+            path = insert_angle_into_filename(path, angle_str)
     time_token = parts[-1]
     time_tuple = parse_time_token(time_token)
     return TipperInfo(
@@ -127,6 +128,7 @@ def extract_angle_from_mat(mat_path: Path) -> Optional[str]:
     """
     try:
         data = loadmat(mat_path)
+        print(f"Getting angle data for {mat_path}...")
         arrays = [v for v in data.values() if isinstance(v, np.ndarray) and v.ndim == 2]
         if not arrays:
             return None
@@ -140,6 +142,27 @@ def extract_angle_from_mat(mat_path: Path) -> Optional[str]:
     except Exception as e:  # pragma: no cover - defensive
         print(f"Failed to extract angle from {mat_path.name}: {e}", file=sys.stderr)
         return None
+
+
+def insert_angle_into_filename(path: Path, angle_str: str) -> Path:
+    """
+    Insert angle_str into the filename after the dirpass segment.
+    Example: shoe_sub_DP_GP1_12-00-00 -> shoe_sub_DP_<angle>_GP1_12-00-00
+    """
+    stem = path.stem
+    parts = stem.split("_")
+    if len(parts) >= 3:
+        parts = parts[:3] + [angle_str] + parts[3:]
+    else:
+        parts.append(angle_str)
+    new_name = "_".join(parts) + path.suffix
+    new_path = path.with_name(new_name)
+    if new_path.exists():
+        print(f"  [WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
+        return path
+    path.rename(new_path)
+    print(f"  [INFO] Inserted angle into tipper filename: {path.name} -> {new_name}")
+    return new_path
 
 
 def collect_tippers_for_sub(tipper_date_dir: Path, participant: str) -> List[TipperInfo]:
@@ -178,6 +201,7 @@ def prompt_direction(video_path: Path, msg: str) -> Optional[str]:
 
 
 def detect_video(video_path: Path, sample_step: int, no_motion_threshold: float) -> Optional[VideoInfo]:
+    ensure_cv2_loaded()
     result = detect_movement_result(
         video_path,
         sample_step=sample_step,
@@ -198,9 +222,13 @@ def detect_video(video_path: Path, sample_step: int, no_motion_threshold: float)
 def collect_videos(video_dir: Path, sample_step: int, no_motion_threshold: float) -> List[VideoInfo]:
     infos: List[VideoInfo] = []
     for path in sorted(p for p in video_dir.iterdir() if p.is_file() and p.suffix.lower() == ".mp4"):
+        print(f"  [SCAN] Detecting direction for video: {path.name}", flush=True)
         info = detect_video(path, sample_step=sample_step, no_motion_threshold=no_motion_threshold)
         if info:
             infos.append(info)
+            print(f"  [OK] {path.name} -> {info.direction} ({info.note})", flush=True)
+        else:
+            print(f"  [SKIP] {path.name} (undecided/removed)", flush=True)
     return infos
 
 
@@ -308,6 +336,15 @@ def match_and_copy(
             print(f"  Video direction corrected to {manual}.")
             continue
 
+        tip_fix = input("  Is tipper direction wrong? (y/n): ").strip().lower()
+        if tip_fix == "y":
+            tipper.direction = video.direction
+            print(f"  Tipper direction corrected to {tipper.direction}; accepting match.")
+            rename_and_copy(video, tipper, dest_dir, dry_run)
+            v_idx += 1
+            t_idx += 1
+            continue
+
         next_tip = tippers[t_idx + 1] if (t_idx + 1) < len(tippers) else None
         if lookahead_ok(video.direction, tipper, next_tip):
             print(f"  Skipping tipper {tipper.path.name} (assumed dud with result U).")
@@ -338,6 +375,24 @@ def rename_and_copy(video: VideoInfo, tipper: TipperInfo, dest_dir: Path, dry_ru
     else:
         shutil.copy2(video.path, target)
         print(f"  Copied {video.path.name} -> {target.name}")
+
+
+_cv2_loaded = False
+
+
+def ensure_cv2_loaded() -> None:
+    """Import cv2 lazily so users see progress; exit with a clear message if unavailable."""
+    global _cv2_loaded
+    if _cv2_loaded:
+        return
+    print("[INFO] Loading OpenCV (cv2)...", flush=True)
+    try:
+        import cv2  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            "OpenCV (cv2) is required. Install with `pip install opencv-python` inside your venv."
+        ) from exc
+    _cv2_loaded = True
 
 
 def main() -> None:
