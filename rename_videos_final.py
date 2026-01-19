@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2  # noqa: F401 - imported for detect_direction
+import numpy as np
+from scipy.io import loadmat
 
 from detect_direction import Direction, detect_movement_result
 
@@ -85,6 +88,9 @@ def parse_tipper_file(path: Path) -> Optional[TipperInfo]:
     direction = dir_result[0].upper()
     result = dir_result[1].upper() if len(dir_result) >= 2 else "U"
     angle = parse_float(parts[3]) if len(parts) >= 4 else None
+    if angle is None:
+        angle_str = extract_angle_from_mat(path)
+        angle = float(angle_str) if angle_str is not None else None
     time_token = parts[-1]
     time_tuple = parse_time_token(time_token)
     return TipperInfo(
@@ -111,6 +117,28 @@ def parse_float(token: str) -> Optional[float]:
     try:
         return float(token)
     except Exception:
+        return None
+
+
+def extract_angle_from_mat(mat_path: Path) -> Optional[str]:
+    """
+    Load a MATLAB .mat file and extract the angle from row 3 (index 2),
+    round to nearest integer, and return as string.
+    """
+    try:
+        data = loadmat(mat_path)
+        arrays = [v for v in data.values() if isinstance(v, np.ndarray) and v.ndim == 2]
+        if not arrays:
+            return None
+        mat = max(arrays, key=lambda a: a.size)
+        if mat.shape[0] < 3:
+            return None
+        angle_value = mat[2, 0]
+        angle_int = int(round(float(angle_value)))
+        print(f"angle is: {angle_int}")
+        return str(angle_int)
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"Failed to extract angle from {mat_path.name}: {e}", file=sys.stderr)
         return None
 
 
