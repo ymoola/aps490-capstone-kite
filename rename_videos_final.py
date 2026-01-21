@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Rename GoPro videos by pairing them with tipper .mat files using detected movement direction.
 
@@ -61,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-motion-threshold",
         type=float,
-        default=0.005,
+        default=0.09,
         help="Absolute dx threshold below which movement is undecided.",
     )
     p.add_argument(
@@ -441,3 +440,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
