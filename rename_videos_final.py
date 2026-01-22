@@ -16,6 +16,7 @@ Workflow:
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ class VideoInfo:
     direction: str  # "D" or "U"
     note: str
     detected_raw: Direction
+    index: Optional[int]
 
 
 @dataclass
@@ -199,7 +201,7 @@ def prompt_direction(video_path: Path, msg: str) -> Optional[str]:
         print("  Please enter d, u, or s.")
 
 
-def detect_video(video_path: Path, sample_step: int, no_motion_threshold: float) -> Optional[VideoInfo]:
+def detect_video(video_path: Path, sample_step: int, no_motion_threshold: float, index: Optional[int]) -> Optional[VideoInfo]:
     ensure_cv2_loaded()
     result = detect_movement_result(
         video_path,
@@ -215,14 +217,18 @@ def detect_video(video_path: Path, sample_step: int, no_motion_threshold: float)
             return None
         du_dir = manual
         note = "manual"
-    return VideoInfo(path=video_path, direction=du_dir, note=note, detected_raw=result.direction)
+    return VideoInfo(path=video_path, direction=du_dir, note=note, detected_raw=result.direction, index=index)
 
 
 def collect_videos(video_dir: Path, sample_step: int, no_motion_threshold: float) -> List[VideoInfo]:
     infos: List[VideoInfo] = []
     for path in sorted(p for p in video_dir.iterdir() if p.is_file() and p.suffix.lower() == ".mp4"):
         print(f"  [SCAN] Detecting direction for video: {path.name}", flush=True)
-        info = detect_video(path, sample_step=sample_step, no_motion_threshold=no_motion_threshold)
+        idx = extract_gopro_index(path.name)
+        if idx is None:
+            print(f"  [WARN] Cannot parse GoPro index from {path.name}; skipping.", flush=True)
+            continue
+        info = detect_video(path, sample_step=sample_step, no_motion_threshold=no_motion_threshold, index=idx)
         if info:
             infos.append(info)
             print(f"  [OK] {path.name} -> {info.direction} ({info.note})", flush=True)
@@ -314,13 +320,25 @@ def match_and_copy(
     dest_dir.mkdir(parents=True, exist_ok=True) if not dry_run else None
     v_idx = 0
     t_idx = 0
+    prev_video_index: Optional[int] = None
     while v_idx < len(videos) and t_idx < len(tippers):
         video = videos[v_idx]
+        if prev_video_index is not None and video.index is not None:
+            gap = video.index - prev_video_index - 1
+            while gap > 0 and t_idx < len(tippers) and tippers[t_idx].result == "U":
+                print(
+                    f"  - Skipping undecided tipper {tippers[t_idx].path.name} due to missing video index gap."
+                )
+                t_idx += 1
+                gap -= 1
+        if t_idx >= len(tippers):
+            break
         tipper = tippers[t_idx]
         if video.direction == tipper.direction:
             rename_and_copy(video, tipper, dest_dir, dry_run)
             v_idx += 1
             t_idx += 1
+            prev_video_index = video.index
             continue
 
         print(f"[CONFLICT] Video {video.path.name} dir={video.direction} vs tipper {tipper.path.name} dir={tipper.direction}")
@@ -330,6 +348,7 @@ def match_and_copy(
             if manual is None:
                 print("  Skipping video; no direction given.")
                 v_idx += 1
+                prev_video_index = video.index
                 continue
             video.direction = manual
             print(f"  Video direction corrected to {manual}.")
@@ -342,6 +361,7 @@ def match_and_copy(
             rename_and_copy(video, tipper, dest_dir, dry_run)
             v_idx += 1
             t_idx += 1
+            prev_video_index = video.index
             continue
 
         next_tip = tippers[t_idx + 1] if (t_idx + 1) < len(tippers) else None
@@ -354,6 +374,7 @@ def match_and_copy(
         choice = input("  Enter 'sv' skip video, 'st' skip tipper, or 'q' quit: ").strip().lower()
         if choice == "sv":
             v_idx += 1
+            prev_video_index = video.index
             continue
         if choice == "st":
             t_idx += 1
@@ -374,6 +395,16 @@ def rename_and_copy(video: VideoInfo, tipper: TipperInfo, dest_dir: Path, dry_ru
     else:
         shutil.copy2(video.path, target)
         print(f"  Copied {video.path.name} -> {target.name}")
+
+
+def extract_gopro_index(name: str) -> Optional[int]:
+    match = re.search(r"(GP|GX)(\d+)", name, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(2))
+    except Exception:
+        return None
 
 
 _cv2_loaded = False
