@@ -165,7 +165,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--video-root",
         type=Path,
-        default=Path("videos"),
+        default=Path("Videos"),
         help="Root directory containing date folders (default: videos)",
     )
     parser.add_argument(
