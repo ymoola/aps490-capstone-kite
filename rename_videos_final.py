@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-motion-threshold",
         type=float,
-        default=0.09,
+        default=0.12,
         help="Absolute dx threshold below which movement is undecided.",
     )
     p.add_argument(
