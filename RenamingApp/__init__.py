@@ -1,0 +1,2 @@
+"""RenamingApp package root."""
+
