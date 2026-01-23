@@ -287,6 +287,34 @@ def update_tipper_result(tipper: TipperInfo, new_result: str) -> TipperInfo:
     )
 
 
+def update_tipper_direction(tipper: TipperInfo, new_direction: str) -> TipperInfo:
+    """Rename the tipper file to reflect a new direction (first char of dirpass)."""
+    path = tipper.path
+    parts = path.stem.split("_")
+    if len(parts) < 3:
+        return tipper
+    dirpass = parts[2]
+    if len(dirpass) >= 1:
+        dirpass = new_direction + (dirpass[1:] if len(dirpass) > 1 else "")
+    else:
+        dirpass = new_direction
+    parts[2] = dirpass
+    new_name = "_".join(parts) + path.suffix
+    new_path = path.with_name(new_name)
+    if new_path.exists():
+        print(f"  [WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
+        return tipper
+    path.rename(new_path)
+    return TipperInfo(
+        path=new_path,
+        direction=new_direction,
+        result=tipper.result,
+        time_tuple=tipper.time_tuple,
+        participant=tipper.participant,
+        angle=tipper.angle,
+    )
+
+
 def preprocess_tippers(tippers: List[TipperInfo]) -> List[TipperInfo]:
     """Review angle-0/undecided tippers with HITL before matching."""
     processed: List[TipperInfo] = []
@@ -356,8 +384,8 @@ def match_and_copy(
 
         tip_fix = input("  Is tipper direction wrong? (y/n): ").strip().lower()
         if tip_fix == "y":
-            tipper.direction = video.direction
-            print(f"  Tipper direction corrected to {tipper.direction}; accepting match.")
+            tipper = update_tipper_direction(tipper, video.direction)
+            print(f"  Tipper direction corrected to {tipper.direction} and filename updated; accepting match.")
             rename_and_copy(video, tipper, dest_dir, dry_run)
             v_idx += 1
             t_idx += 1
