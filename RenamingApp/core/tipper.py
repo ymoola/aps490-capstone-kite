@@ -145,7 +145,7 @@ def update_tipper_result(tipper: TipperInfo, new_result: str, log: LogFn) -> Tip
     )
 
 
-def update_tipper_direction(tipper: TipperInfo, new_direction: str, log: LogFn) -> TipperInfo:
+def update_tipper_direction(tipper: TipperInfo, new_direction: str, log: LogFn, dry_run: bool = False) -> TipperInfo:
     """Rename the tipper file to reflect a new direction (first char of dirpass)."""
     path = tipper.path
     parts = path.stem.split("_")
@@ -159,10 +159,13 @@ def update_tipper_direction(tipper: TipperInfo, new_direction: str, log: LogFn) 
     parts[2] = dirpass
     new_name = "_".join(parts) + path.suffix
     new_path = path.with_name(new_name)
-    if new_path.exists():
+    if new_path.exists() and not dry_run:
         log(f"[WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return tipper
-    path.rename(new_path)
+    if dry_run:
+        log(f"[DRY] Would rename {path.name} to {new_name}")
+    else:
+        path.rename(new_path)
     return TipperInfo(
         path=new_path,
         direction=new_direction,
@@ -171,4 +174,3 @@ def update_tipper_direction(tipper: TipperInfo, new_direction: str, log: LogFn) 
         participant=tipper.participant,
         angle=tipper.angle,
     )
-

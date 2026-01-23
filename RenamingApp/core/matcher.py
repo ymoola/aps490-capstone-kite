@@ -84,8 +84,11 @@ def match_and_copy(
 
         if resolution.action == "fix_tipper":
             new_dir = resolution.corrected_tipper_direction or video.direction
-            tipper = update_tipper_direction(tipper, new_dir, log)
-            log(f"  Tipper direction corrected to {tipper.direction} and filename updated; accepting match.")
+            tipper = update_tipper_direction(tipper, new_dir, log, dry_run=dry_run)
+            if dry_run:
+                log(f"  Tipper direction would be corrected to {tipper.direction}; accepting match.")
+            else:
+                log(f"  Tipper direction corrected to {tipper.direction} and filename updated; accepting match.")
             rename_and_copy(video, tipper, dest_dir, dry_run, log)
             v_idx += 1
             t_idx += 1
@@ -196,4 +199,3 @@ def count_videos(video_root: Path) -> int:
         for sub_dir in sorted(p for p in date_dir.iterdir() if p.is_dir())
         for video_path in sorted(p for p in sub_dir.iterdir() if p.is_file() and p.suffix.lower() == ".mp4")
     )
-
