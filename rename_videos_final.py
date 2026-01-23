@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def parse_tipper_file(path: Path) -> Optional[TipperInfo]:
+def parse_tipper_file(path: Path, rename_files: bool) -> Optional[TipperInfo]:
     name = path.name
     if not name.endswith(".mat"):
         return None
@@ -92,7 +92,7 @@ def parse_tipper_file(path: Path) -> Optional[TipperInfo]:
         angle_str = extract_angle_from_mat(path)
         if angle_str is not None:
             angle = float(angle_str)
-            path = insert_angle_into_filename(path, angle_str)
+            path = insert_angle_into_filename(path, angle_str, rename_files=rename_files)
     time_token = parts[-1]
     time_tuple = parse_time_token(time_token)
     return TipperInfo(
@@ -145,7 +145,7 @@ def extract_angle_from_mat(mat_path: Path) -> Optional[str]:
         return None
 
 
-def insert_angle_into_filename(path: Path, angle_str: str) -> Path:
+def insert_angle_into_filename(path: Path, angle_str: str, rename_files: bool = True) -> Path:
     """
     Insert angle_str into the filename after the dirpass segment.
     Example: shoe_sub_DP_GP1_12-00-00 -> shoe_sub_DP_<angle>_GP1_12-00-00
@@ -158,6 +158,9 @@ def insert_angle_into_filename(path: Path, angle_str: str) -> Path:
         parts.append(angle_str)
     new_name = "_".join(parts) + path.suffix
     new_path = path.with_name(new_name)
+    if not rename_files:
+        print(f"  [DRY] Would insert angle into tipper filename: {path.name} -> {new_name}")
+        return new_path
     if new_path.exists():
         print(f"  [WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return path
@@ -166,13 +169,13 @@ def insert_angle_into_filename(path: Path, angle_str: str) -> Path:
     return new_path
 
 
-def collect_tippers_for_sub(tipper_date_dir: Path, participant: str) -> List[TipperInfo]:
+def collect_tippers_for_sub(tipper_date_dir: Path, participant: str, rename_files: bool) -> List[TipperInfo]:
     tippers: List[TipperInfo] = []
     pattern = f"*_{participant}_*.mat"
     for path in sorted(tipper_date_dir.glob(pattern)):
         if not path.is_file():
             continue
-        parsed = parse_tipper_file(path)
+        parsed = parse_tipper_file(path, rename_files=rename_files)
         if parsed and parsed.participant == participant:
             tippers.append(parsed)
     # Sort primarily by time token, then by filename to keep order stable
@@ -259,7 +262,7 @@ def prompt_angle_zero_decision(tipper: TipperInfo) -> Optional[str]:
         print("  Please enter u, p, f, or d.")
 
 
-def update_tipper_result(tipper: TipperInfo, new_result: str) -> TipperInfo:
+def update_tipper_result(tipper: TipperInfo, new_result: str, rename_files: bool) -> TipperInfo:
     """Rename the tipper file to reflect a new result (second char of dirpass)."""
     path = tipper.path
     parts = path.stem.split("_")
@@ -273,6 +276,16 @@ def update_tipper_result(tipper: TipperInfo, new_result: str) -> TipperInfo:
     parts[2] = dirpass
     new_name = "_".join(parts) + path.suffix
     new_path = path.with_name(new_name)
+    if not rename_files:
+        print(f"  [DRY] Would rename tipper result: {path.name} -> {new_name}")
+        return TipperInfo(
+            path=new_path,
+            direction=tipper.direction,
+            result=new_result,
+            time_tuple=tipper.time_tuple,
+            participant=tipper.participant,
+            angle=tipper.angle,
+        )
     if new_path.exists():
         print(f"  [WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return tipper
@@ -287,7 +300,7 @@ def update_tipper_result(tipper: TipperInfo, new_result: str) -> TipperInfo:
     )
 
 
-def update_tipper_direction(tipper: TipperInfo, new_direction: str) -> TipperInfo:
+def update_tipper_direction(tipper: TipperInfo, new_direction: str, rename_files: bool) -> TipperInfo:
     """Rename the tipper file to reflect a new direction (first char of dirpass)."""
     path = tipper.path
     parts = path.stem.split("_")
@@ -301,6 +314,16 @@ def update_tipper_direction(tipper: TipperInfo, new_direction: str) -> TipperInf
     parts[2] = dirpass
     new_name = "_".join(parts) + path.suffix
     new_path = path.with_name(new_name)
+    if not rename_files:
+        print(f"  [DRY] Would rename tipper direction: {path.name} -> {new_name}")
+        return TipperInfo(
+            path=new_path,
+            direction=new_direction,
+            result=tipper.result,
+            time_tuple=tipper.time_tuple,
+            participant=tipper.participant,
+            angle=tipper.angle,
+        )
     if new_path.exists():
         print(f"  [WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return tipper
@@ -315,7 +338,7 @@ def update_tipper_direction(tipper: TipperInfo, new_direction: str) -> TipperInf
     )
 
 
-def preprocess_tippers(tippers: List[TipperInfo]) -> List[TipperInfo]:
+def preprocess_tippers(tippers: List[TipperInfo], rename_files: bool) -> List[TipperInfo]:
     """Review angle-0/undecided tippers with HITL before matching."""
     processed: List[TipperInfo] = []
     for tipper in tippers:
@@ -325,7 +348,7 @@ def preprocess_tippers(tippers: List[TipperInfo]) -> List[TipperInfo]:
                 print(f"  - Deleting/Skipping tipper {tipper.path.name}")
                 continue
             if decision != tipper.result:
-                tipper = update_tipper_result(tipper, decision)
+                tipper = update_tipper_result(tipper, decision, rename_files=rename_files)
         processed.append(tipper)
     processed.sort(key=lambda t: (t.time_tuple, t.path.name))
     return processed
@@ -345,6 +368,7 @@ def match_and_copy(
     dest_dir: Path,
     dry_run: bool,
 ) -> None:
+    rename_files = not dry_run
     dest_dir.mkdir(parents=True, exist_ok=True) if not dry_run else None
     v_idx = 0
     t_idx = 0
@@ -384,8 +408,8 @@ def match_and_copy(
 
         tip_fix = input("  Is tipper direction wrong? (y/n): ").strip().lower()
         if tip_fix == "y":
-            tipper = update_tipper_direction(tipper, video.direction)
-            print(f"  Tipper direction corrected to {tipper.direction} and filename updated; accepting match.")
+            tipper = update_tipper_direction(tipper, video.direction, rename_files=rename_files)
+            print(f"  Tipper direction corrected to {tipper.direction}{' and filename updated' if rename_files else ' (dry-run preview)'}; accepting match.")
             rename_and_copy(video, tipper, dest_dir, dry_run)
             v_idx += 1
             t_idx += 1
@@ -461,6 +485,7 @@ def main() -> None:
         raise SystemExit(f"Tipper directory not found: {args.tippers}")
 
     failures: List[str] = []
+    rename_files = not args.dry_run
     for date_dir in sorted(p for p in args.videos.iterdir() if p.is_dir()):
         date_name = date_dir.name
         tipper_date = args.tippers / date_name
@@ -476,12 +501,12 @@ def main() -> None:
                 print("  [WARN] No videos found; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
                 continue
-            tippers = collect_tippers_for_sub(tipper_date, sub_name)
+            tippers = collect_tippers_for_sub(tipper_date, sub_name, rename_files=rename_files)
             if not tippers:
                 print("  [WARN] No tipper files for this sub; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
                 continue
-            tippers = preprocess_tippers(tippers)
+            tippers = preprocess_tippers(tippers, rename_files=rename_files)
             if not tippers:
                 print("  [WARN] No tipper files left after preprocessing; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
