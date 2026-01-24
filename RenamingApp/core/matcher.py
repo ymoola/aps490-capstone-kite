@@ -178,6 +178,13 @@ def process_all(
                 log("  [WARN] No tipper files left after preprocessing; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
                 continue
+            if abs(len(videos) - len(tippers)) > 3:
+                log(
+                    f"  [WARN] Count gap too large (videos={len(videos)}, tippers={len(tippers)}); "
+                    "skipping this sub without matching."
+                )
+                failures.append(f"{date_name}/{sub_name}")
+                continue
             dest_dir = config.dest_dir / date_name / sub_name
             match_result = match_and_copy(
                 videos, tippers, dest_dir=dest_dir, dry_run=config.dry_run, callbacks=callbacks, log=log, stop_requested=stop_requested

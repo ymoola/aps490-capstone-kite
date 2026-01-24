@@ -511,6 +511,13 @@ def main() -> None:
                 print("  [WARN] No tipper files left after preprocessing; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
                 continue
+            if abs(len(videos) - len(tippers)) > 3:
+                print(
+                    f"  [WARN] Count gap too large (videos={len(videos)}, tippers={len(tippers)}); "
+                    "skipping this sub without matching."
+                )
+                failures.append(f"{date_name}/{sub_name}")
+                continue
             dest_dir = args.dest / date_name / sub_name
             match_and_copy(videos, tippers, dest_dir=dest_dir, dry_run=args.dry_run)
 
