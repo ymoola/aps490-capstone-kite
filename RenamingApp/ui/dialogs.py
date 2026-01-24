@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import os
+import platform
+import subprocess
 from pathlib import Path
 from typing import Optional
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -13,6 +18,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+
+try:
+    import cv2
+
+    CV2_AVAILABLE = True
+except Exception:
+    CV2_AVAILABLE = False
 
 from RenamingApp.core.models import ConflictResolution, TipperInfo, VideoInfo
 
@@ -25,6 +37,8 @@ class DirectionDialog(QDialog):
         layout = QVBoxLayout()
         layout.addWidget(QLabel(message))
         layout.addWidget(QLabel(f"Video: {video_path.name}"))
+
+        self._add_preview_section(layout, video_path)
 
         buttons = QHBoxLayout()
         down_btn = QPushButton("Down (D)")
@@ -53,6 +67,53 @@ class DirectionDialog(QDialog):
 
     def selected_direction(self) -> Optional[str]:
         return self._result
+
+    def _add_preview_section(self, layout: QVBoxLayout, video_path: Path) -> None:
+        preview_row = QHBoxLayout()
+        thumb_label = QLabel()
+        thumb_label.setMinimumHeight(180)
+        thumb_label.setMinimumWidth(240)
+        thumb_label.setStyleSheet("border: 1px solid #ccc;")
+        pixmap = self._load_thumbnail(video_path)
+        if pixmap:
+            thumb_label.setPixmap(pixmap.scaled(320, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            thumb_label.setText("Preview unavailable")
+        preview_row.addWidget(thumb_label)
+
+        open_btn = QPushButton("Open in Player")
+        open_btn.clicked.connect(lambda: self._open_external(video_path))
+        preview_row.addWidget(open_btn)
+
+        layout.addLayout(preview_row)
+
+    def _load_thumbnail(self, video_path: Path) -> Optional[QPixmap]:
+        if not CV2_AVAILABLE:
+            return None
+        try:
+            cap = cv2.VideoCapture(str(video_path))
+            ok, frame = cap.read()
+            cap.release()
+            if not ok or frame is None:
+                return None
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, _ = frame_rgb.shape
+            qimg = QImage(frame_rgb.data, w, h, 3 * w, QImage.Format_RGB888)
+            return QPixmap.fromImage(qimg)
+        except Exception:
+            return None
+
+    def _open_external(self, video_path: Path) -> None:
+        system = platform.system().lower()
+        try:
+            if system == "darwin":
+                subprocess.Popen(["open", str(video_path)])
+            elif system == "windows":
+                os.startfile(video_path)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(video_path)])
+        except Exception:
+            pass
 
 
 class AngleDecisionDialog(QDialog):
