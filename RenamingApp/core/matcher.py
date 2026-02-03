@@ -29,7 +29,16 @@ def lookahead_ok(video_dir: str, tipper: TipperInfo, next_tipper: Optional[Tippe
     return video_dir == next_tipper.direction
 
 
-def rename_and_copy(video: VideoInfo, tipper: TipperInfo, dest_dir: Path, dry_run: bool, log: LogFn) -> None:
+def rename_and_copy(
+    video: VideoInfo,
+    tipper: TipperInfo,
+    dest_dir: Path,
+    dry_run: bool,
+    log: LogFn,
+    reporter: Optional[ReportCollector],
+    date: str,
+    sub: str,
+) -> None:
     target = dest_dir / (tipper.path.stem + video.path.suffix.lower())
     if dry_run:
         log(f"  [DRY] {video.path.name} -> {target}")
@@ -37,6 +46,8 @@ def rename_and_copy(video: VideoInfo, tipper: TipperInfo, dest_dir: Path, dry_ru
         dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(video.path, target)
         log(f"  Copied {video.path.name} -> {target.name}")
+    if reporter:
+        reporter.record_mapping(date, sub, video.path.name, target.name, dry_run)
 
 
 def match_and_copy(
@@ -47,6 +58,9 @@ def match_and_copy(
     callbacks: HitlCallbacks,
     log: LogFn,
     stop_requested: StopCheck,
+    reporter: ReportCollector,
+    date: str,
+    sub: str,
 ) -> MatchResult:
     v_idx = 0
     t_idx = 0
@@ -65,7 +79,7 @@ def match_and_copy(
             break
         tipper = tippers[t_idx]
         if video.direction == tipper.direction:
-            rename_and_copy(video, tipper, dest_dir, dry_run, log)
+            rename_and_copy(video, tipper, dest_dir, dry_run, log, reporter, date, sub)
             v_idx += 1
             t_idx += 1
             prev_video_index = video.index
@@ -84,12 +98,12 @@ def match_and_copy(
 
         if resolution.action == "fix_tipper":
             new_dir = resolution.corrected_tipper_direction or video.direction
-            tipper = update_tipper_direction(tipper, new_dir, log, dry_run=dry_run)
+            tipper = update_tipper_direction(tipper, new_dir, log, dry_run=dry_run, reporter=reporter, date=date, sub=sub)
             if dry_run:
                 log(f"  Tipper direction would be corrected to {tipper.direction}; accepting match.")
             else:
                 log(f"  Tipper direction corrected to {tipper.direction} and filename updated; accepting match.")
-            rename_and_copy(video, tipper, dest_dir, dry_run, log)
+            rename_and_copy(video, tipper, dest_dir, dry_run, log, reporter, date, sub)
             v_idx += 1
             t_idx += 1
             prev_video_index = video.index
@@ -131,6 +145,7 @@ def process_all(
     log: LogFn,
     stop_requested: StopCheck,
     progress_tick: Optional[Callable[[], None]] = None,
+    reporter: Optional[ReportCollector] = None,
 ) -> ProcessSummary:
     if not config.videos_dir.exists() or not config.videos_dir.is_dir():
         raise FileNotFoundError(f"Video directory not found: {config.videos_dir}")
@@ -138,6 +153,7 @@ def process_all(
         raise FileNotFoundError(f"Tipper directory not found: {config.tippers_dir}")
 
     failures: List[str] = []
+    reporter = reporter or ReportCollector()
     unmatched_videos_total = 0
     unmatched_tippers_total = 0
 
@@ -149,6 +165,7 @@ def process_all(
         if not tipper_date.exists():
             log(f"[WARN] No tipper folder for date {date_name}; skipping.")
             failures.append(date_name)
+            reporter.record_failure(date_name)
             continue
         for sub_dir in sorted(p for p in date_dir.iterdir() if p.is_dir()):
             if stop_requested():
@@ -167,16 +184,19 @@ def process_all(
             if not videos:
                 log("  [WARN] No videos found; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
+                reporter.record_failure(f"{date_name}/{sub_name}")
                 continue
             tippers = collect_tippers_for_sub(tipper_date, sub_name, log)
             if not tippers:
                 log("  [WARN] No tipper files for this sub; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
+                reporter.record_failure(f"{date_name}/{sub_name}")
                 continue
-            tippers = preprocess_tippers(tippers, callbacks, log, stop_requested)
+            tippers = preprocess_tippers(tippers, callbacks, log, stop_requested, date_name, sub_name, reporter=reporter)
             if not tippers:
                 log("  [WARN] No tipper files left after preprocessing; skipping.")
                 failures.append(f"{date_name}/{sub_name}")
+                reporter.record_failure(f"{date_name}/{sub_name}")
                 continue
             if abs(len(videos) - len(tippers)) > 3:
                 log(
@@ -184,10 +204,20 @@ def process_all(
                     "skipping this sub without matching."
                 )
                 failures.append(f"{date_name}/{sub_name}")
+                reporter.record_failure(f"{date_name}/{sub_name}")
                 continue
             dest_dir = config.dest_dir / date_name / sub_name
             match_result = match_and_copy(
-                videos, tippers, dest_dir=dest_dir, dry_run=config.dry_run, callbacks=callbacks, log=log, stop_requested=stop_requested
+                videos,
+                tippers,
+                dest_dir=dest_dir,
+                dry_run=config.dry_run,
+                callbacks=callbacks,
+                log=log,
+                stop_requested=stop_requested,
+                reporter=reporter,
+                date=date_name,
+                sub=sub_name,
             )
             unmatched_videos_total += match_result.unmatched_videos
             unmatched_tippers_total += match_result.unmatched_tippers

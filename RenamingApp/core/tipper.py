@@ -8,6 +8,7 @@ import numpy as np
 from scipy.io import loadmat
 
 from .models import LogFn, TipperInfo
+from .reporting import ReportCollector
 
 
 def parse_tipper_file(path: Path, log: Optional[LogFn] = None) -> Optional[TipperInfo]:
@@ -117,7 +118,14 @@ def collect_tippers_for_sub(tipper_date_dir: Path, participant: str, log: LogFn)
     return tippers
 
 
-def update_tipper_result(tipper: TipperInfo, new_result: str, log: LogFn) -> TipperInfo:
+def update_tipper_result(
+    tipper: TipperInfo,
+    new_result: str,
+    log: LogFn,
+    reporter: Optional[ReportCollector] = None,
+    date: str = "",
+    sub: str = "",
+) -> TipperInfo:
     """Rename the tipper file to reflect a new result (second char of dirpass)."""
     path = tipper.path
     parts = path.stem.split("_")
@@ -135,6 +143,8 @@ def update_tipper_result(tipper: TipperInfo, new_result: str, log: LogFn) -> Tip
         log(f"[WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return tipper
     path.rename(new_path)
+    if reporter:
+        reporter.record_correction(date, sub, path.name, new_path.name, "result_update")
     return TipperInfo(
         path=new_path,
         direction=tipper.direction,
@@ -145,7 +155,15 @@ def update_tipper_result(tipper: TipperInfo, new_result: str, log: LogFn) -> Tip
     )
 
 
-def update_tipper_direction(tipper: TipperInfo, new_direction: str, log: LogFn, dry_run: bool = False) -> TipperInfo:
+def update_tipper_direction(
+    tipper: TipperInfo,
+    new_direction: str,
+    log: LogFn,
+    dry_run: bool = False,
+    reporter: Optional[ReportCollector] = None,
+    date: str = "",
+    sub: str = "",
+) -> TipperInfo:
     """Rename the tipper file to reflect a new direction (first char of dirpass)."""
     path = tipper.path
     parts = path.stem.split("_")
@@ -166,6 +184,8 @@ def update_tipper_direction(tipper: TipperInfo, new_direction: str, log: LogFn, 
         log(f"[DRY] Would rename {path.name} to {new_name}")
     else:
         path.rename(new_path)
+    if reporter:
+        reporter.record_correction(date, sub, path.name, new_name, "direction_fix")
     return TipperInfo(
         path=new_path,
         direction=new_direction,

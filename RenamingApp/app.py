@@ -27,14 +27,20 @@ def main() -> None:
         platforms_dir = plugin_dir / "platforms"
         qt_lib_dir = qt_base / "lib"
 
+        # Clear any stale Qt plugin env carried from previous runs.
+        for key in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH"):
+            os.environ.pop(key, None)
+
         if plugin_dir.exists():
-            # Point to the plugin root; Qt will look inside platforms/.
-            os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", str(plugin_dir))
-            os.environ.setdefault("QT_PLUGIN_PATH", str(plugin_dir))
-            paths = [str(plugin_dir)]
+            # Force plugin paths each run to avoid stale env between sessions.
+            os.environ["QT_PLUGIN_PATH"] = str(plugin_dir)
             if platforms_dir.exists():
-                paths.insert(0, str(platforms_dir))
-            QtCore.QCoreApplication.setLibraryPaths(paths + QtCore.QCoreApplication.libraryPaths())
+                os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(platforms_dir)
+            paths = []
+            if platforms_dir.exists():
+                paths.append(str(platforms_dir))
+            paths.append(str(plugin_dir))
+            QtCore.QCoreApplication.setLibraryPaths(paths)
         if platforms_dir.exists():
             QtCore.QCoreApplication.addLibraryPath(str(platforms_dir))
         if qt_lib_dir.exists():

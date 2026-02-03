@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from RenamingApp.core.matcher import count_videos, process_all
+from RenamingApp.core.reporting import ReportCollector
 from RenamingApp.core.models import (
     ConflictResolution,
     HitlCallbacks,
@@ -49,11 +50,13 @@ class ProcessingWorker(QObject):
     request_angle = Signal(object, object)
     request_conflict = Signal(object, object, object, object)
 
-    def __init__(self, config: RunConfig):
+    def __init__(self, config: RunConfig, report_dir: Path):
         super().__init__()
         self.config = config
         self.cancel_event = Event()
         self._progress_value = 0
+        self.report_dir = report_dir
+        self.reporter = ReportCollector()
 
     def cancel(self) -> None:
         self.cancel_event.set()
@@ -74,7 +77,9 @@ class ProcessingWorker(QObject):
                 log=self._log,
                 stop_requested=self.cancel_event.is_set,
                 progress_tick=self._progress_tick,
+                reporter=self.reporter,
             )
+            self.reporter.write_reports(self.report_dir)
             self.finished.emit(summary)
         except ProcessingCancelled as exc:
             self.log.emit(str(exc))
@@ -191,6 +196,14 @@ class MainWindow(QMainWindow):
         logfile_row.addWidget(log_button)
         form.addRow(self.save_log_checkbox, logfile_row)
 
+        self.report_dir_edit = QLineEdit(str(Path("run_reports")))
+        report_button = QPushButton("Browse")
+        report_button.clicked.connect(lambda: self._choose_dir(self.report_dir_edit, for_file=False))
+        report_row = QHBoxLayout()
+        report_row.addWidget(self.report_dir_edit)
+        report_row.addWidget(report_button)
+        form.addRow("Reports directory:", report_row)
+
         group.setLayout(form)
         return group
 
@@ -266,6 +279,12 @@ class MainWindow(QMainWindow):
             no_motion_threshold=self.threshold_spin.value(),
             dry_run=self.dry_run_checkbox.isChecked(),
         )
+        report_dir = Path(self.report_dir_edit.text()).expanduser()
+        try:
+            report_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Cannot create reports directory: {exc}")
+            return
 
         self.log_panel.append_line("Starting run...")
         self.progress_bar.setValue(0)
@@ -273,7 +292,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
         self._cancel_requested = False
 
-        self.worker = ProcessingWorker(config)
+        self.worker = ProcessingWorker(config, report_dir=report_dir)
         self.thread = QThread()
         self.worker.moveToThread(self.thread)
 
@@ -358,6 +377,8 @@ class MainWindow(QMainWindow):
             msg_lines.append(
                 f"Unmatched videos: {summary.unmatched_videos}, unmatched tippers: {summary.unmatched_tippers}"
             )
+        if self.worker:
+            msg_lines.append(f"Reports written to: {self.worker.report_dir}")
         QMessageBox.information(self, "Finished", "\n".join(msg_lines))
 
     @Slot(str)

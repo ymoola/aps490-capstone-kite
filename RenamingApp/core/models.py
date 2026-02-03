@@ -75,6 +75,10 @@ class HitlCallbacks:
     resolve_conflict: Callable[[VideoInfo, TipperInfo, Optional[TipperInfo]], ConflictResolution]
 
 
+@dataclass
+class ReportPaths:
+    reports_dir: Path
+
+
 class ProcessingCancelled(Exception):
     """Raised when the user aborts the run or cancels from the UI."""
-

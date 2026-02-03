@@ -4,3 +4,4 @@ PySide6-Essentials==6.6.3
 opencv-python
 scipy
 numpy<2.0
+openpyxl

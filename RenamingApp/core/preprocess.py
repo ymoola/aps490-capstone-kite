@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import List
 
+from typing import Optional
+
 from .models import HitlCallbacks, LogFn, ProcessingCancelled, StopCheck, TipperInfo
+from .reporting import ReportCollector
 from .tipper import update_tipper_result
 
 
@@ -11,6 +14,9 @@ def preprocess_tippers(
     callbacks: HitlCallbacks,
     log: LogFn,
     stop_requested: StopCheck,
+    date: str,
+    sub: str,
+    reporter: Optional[ReportCollector] = None,
 ) -> List[TipperInfo]:
     """Review angle-0/undecided tippers with HITL before matching."""
     processed: List[TipperInfo] = []
@@ -23,8 +29,7 @@ def preprocess_tippers(
                 log(f"  - Deleting/Skipping tipper {tipper.path.name}")
                 continue
             if decision != tipper.result:
-                tipper = update_tipper_result(tipper, decision, log)
+                tipper = update_tipper_result(tipper, decision, log, reporter=reporter, date=date, sub=sub)
         processed.append(tipper)
     processed.sort(key=lambda t: (t.time_tuple, t.path.name))
     return processed
-
