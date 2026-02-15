@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -10,28 +9,48 @@ from scipy.io import loadmat
 from .models import LogFn, TipperInfo
 from .reporting import ReportCollector
 
+_VALID_DIRECTIONS = {"D", "U"}
+_VALID_RESULTS = {"P", "F", "U"}
+
 
 def parse_tipper_file(path: Path, log: Optional[LogFn] = None) -> Optional[TipperInfo]:
     name = path.name
     logger = log or (lambda _: None)
     if not name.endswith(".mat"):
         return None
+
     stem = name[:-4]
     parts = stem.split("_")
     if len(parts) < 5:
+        logger(f"[WARN] Skipping malformed tipper filename: {name}")
         return None
-    participant = parts[1]
-    dir_result = parts[2]
+
+    participant = parts[1].strip()
+    if not participant:
+        logger(f"[WARN] Skipping tipper with empty participant token: {name}")
+        return None
+
+    dir_result = parts[2].strip().upper()
     if len(dir_result) < 1:
+        logger(f"[WARN] Skipping tipper with invalid direction/result token: {name}")
         return None
-    direction = dir_result[0].upper()
-    result = dir_result[1].upper() if len(dir_result) >= 2 else "U"
+
+    direction = dir_result[0]
+    result = dir_result[1] if len(dir_result) >= 2 else "U"
+    if direction not in _VALID_DIRECTIONS:
+        logger(f"[WARN] Skipping tipper with unsupported direction '{direction}': {name}")
+        return None
+    if result not in _VALID_RESULTS:
+        logger(f"[WARN] Skipping tipper with unsupported result '{result}': {name}")
+        return None
+
     angle = parse_float(parts[3]) if len(parts) >= 4 else None
     if angle is None:
         angle_str = extract_angle_from_mat(path, logger)
         if angle_str is not None:
             angle = float(angle_str)
             path = insert_angle_into_filename(path, angle_str, logger)
+
     time_token = parts[-1]
     time_tuple = parse_time_token(time_token)
     return TipperInfo(
@@ -79,9 +98,18 @@ def extract_angle_from_mat(mat_path: Path, log: LogFn) -> Optional[str]:
         angle_int = int(round(float(angle_value)))
         log(f"Angle is: {angle_int}")
         return str(angle_int)
-    except Exception as e:  # pragma: no cover - defensive
-        print(f"Failed to extract angle from {mat_path.name}: {e}", file=sys.stderr)
+    except Exception as exc:  # pragma: no cover - defensive
+        log(f"[WARN] Failed to extract angle from {mat_path.name}: {exc}")
         return None
+
+
+def _safe_rename(path: Path, new_path: Path, log: LogFn) -> bool:
+    try:
+        path.rename(new_path)
+        return True
+    except OSError as exc:
+        log(f"[WARN] Failed renaming {path.name} -> {new_path.name}: {exc}")
+        return False
 
 
 def insert_angle_into_filename(path: Path, angle_str: str, log: LogFn) -> Path:
@@ -100,9 +128,10 @@ def insert_angle_into_filename(path: Path, angle_str: str, log: LogFn) -> Path:
     if new_path.exists():
         log(f"[WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return path
-    path.rename(new_path)
-    log(f"[INFO] Inserted angle into tipper filename: {path.name} -> {new_name}")
-    return new_path
+    if _safe_rename(path, new_path, log):
+        log(f"[INFO] Inserted angle into tipper filename: {path.name} -> {new_name}")
+        return new_path
+    return path
 
 
 def collect_tippers_for_sub(tipper_date_dir: Path, participant: str, log: LogFn) -> List[TipperInfo]:
@@ -111,7 +140,11 @@ def collect_tippers_for_sub(tipper_date_dir: Path, participant: str, log: LogFn)
     for path in sorted(tipper_date_dir.glob(pattern)):
         if not path.is_file():
             continue
-        parsed = parse_tipper_file(path, log=log)
+        try:
+            parsed = parse_tipper_file(path, log=log)
+        except Exception as exc:
+            log(f"[WARN] Failed parsing tipper file '{path.name}': {exc}")
+            parsed = None
         if parsed and parsed.participant == participant:
             tippers.append(parsed)
     tippers.sort(key=lambda t: (t.time_tuple, t.path.name))
@@ -122,33 +155,58 @@ def update_tipper_result(
     tipper: TipperInfo,
     new_result: str,
     log: LogFn,
+    dry_run: bool = False,
     reporter: Optional[ReportCollector] = None,
     date: str = "",
     sub: str = "",
 ) -> TipperInfo:
     """Rename the tipper file to reflect a new result (second char of dirpass)."""
+    normalized_result = new_result.strip().upper()
+    if normalized_result not in _VALID_RESULTS:
+        log(f"[WARN] Invalid tipper result '{new_result}'. Keeping original value '{tipper.result}'.")
+        return tipper
+
     path = tipper.path
     parts = path.stem.split("_")
     if len(parts) < 3:
         return tipper
+
     dirpass = parts[2]
     if len(dirpass) >= 2:
-        dirpass = dirpass[0] + new_result
+        dirpass = dirpass[0] + normalized_result
     else:
-        dirpass = dirpass + new_result
+        dirpass = (dirpass[:1] or "D") + normalized_result
     parts[2] = dirpass
+
     new_name = "_".join(parts) + path.suffix
     new_path = path.with_name(new_name)
+    if new_path == path:
+        return TipperInfo(
+            path=path,
+            direction=tipper.direction,
+            result=normalized_result,
+            time_tuple=tipper.time_tuple,
+            participant=tipper.participant,
+            angle=tipper.angle,
+        )
+
     if new_path.exists():
         log(f"[WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return tipper
-    path.rename(new_path)
+
+    if dry_run:
+        log(f"[DRY] Would rename {path.name} to {new_name}")
+    else:
+        if not _safe_rename(path, new_path, log):
+            return tipper
+
     if reporter:
-        reporter.record_correction(date, sub, path.name, new_path.name, "result_update")
+        reporter.record_correction(date, sub, path.name, new_name, "result_update")
+
     return TipperInfo(
         path=new_path,
         direction=tipper.direction,
-        result=new_result,
+        result=normalized_result,
         time_tuple=tipper.time_tuple,
         participant=tipper.participant,
         angle=tipper.angle,
@@ -165,30 +223,51 @@ def update_tipper_direction(
     sub: str = "",
 ) -> TipperInfo:
     """Rename the tipper file to reflect a new direction (first char of dirpass)."""
+    normalized_direction = new_direction.strip().upper()
+    if normalized_direction not in _VALID_DIRECTIONS:
+        log(f"[WARN] Invalid tipper direction '{new_direction}'. Keeping original value '{tipper.direction}'.")
+        return tipper
+
     path = tipper.path
     parts = path.stem.split("_")
     if len(parts) < 3:
         return tipper
+
     dirpass = parts[2]
     if len(dirpass) >= 1:
-        dirpass = new_direction + (dirpass[1:] if len(dirpass) > 1 else "")
+        dirpass = normalized_direction + (dirpass[1:] if len(dirpass) > 1 else "")
     else:
-        dirpass = new_direction
+        dirpass = normalized_direction
     parts[2] = dirpass
+
     new_name = "_".join(parts) + path.suffix
     new_path = path.with_name(new_name)
-    if new_path.exists() and not dry_run:
+    if new_path == path:
+        return TipperInfo(
+            path=path,
+            direction=normalized_direction,
+            result=tipper.result,
+            time_tuple=tipper.time_tuple,
+            participant=tipper.participant,
+            angle=tipper.angle,
+        )
+
+    if new_path.exists():
         log(f"[WARN] Cannot rename {path.name} to {new_name} (target exists). Keeping original name.")
         return tipper
+
     if dry_run:
         log(f"[DRY] Would rename {path.name} to {new_name}")
     else:
-        path.rename(new_path)
+        if not _safe_rename(path, new_path, log):
+            return tipper
+
     if reporter:
         reporter.record_correction(date, sub, path.name, new_name, "direction_fix")
+
     return TipperInfo(
         path=new_path,
-        direction=new_direction,
+        direction=normalized_direction,
         result=tipper.result,
         time_tuple=tipper.time_tuple,
         participant=tipper.participant,

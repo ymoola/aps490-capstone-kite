@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
 )
@@ -33,7 +34,9 @@ class DirectionDialog(QDialog):
     def __init__(self, video_path: Path, message: str, parent=None):
         super().__init__(parent)
         self._result: Optional[str] = None
+        self.setWindowModality(Qt.WindowModal)
         self.setWindowTitle("Direction Needed")
+        self.setMinimumWidth(640)
         layout = QVBoxLayout()
         layout.addWidget(QLabel(message))
         layout.addWidget(QLabel(f"Video: {video_path.name}"))
@@ -53,6 +56,9 @@ class DirectionDialog(QDialog):
         layout.addLayout(buttons)
 
         cancel_box = QDialogButtonBox(QDialogButtonBox.Cancel)
+        cancel_btn = cancel_box.button(QDialogButtonBox.Cancel)
+        if cancel_btn:
+            cancel_btn.setText("Abort Run")
         cancel_box.rejected.connect(self.reject)
         layout.addWidget(cancel_box)
         self.setLayout(layout)
@@ -90,10 +96,12 @@ class DirectionDialog(QDialog):
     def _load_thumbnail(self, video_path: Path) -> Optional[QPixmap]:
         if not CV2_AVAILABLE:
             return None
+        cap = None
         try:
             cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                return None
             ok, frame = cap.read()
-            cap.release()
             if not ok or frame is None:
                 return None
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -102,8 +110,14 @@ class DirectionDialog(QDialog):
             return QPixmap.fromImage(qimg)
         except Exception:
             return None
+        finally:
+            if cap is not None:
+                cap.release()
 
     def _open_external(self, video_path: Path) -> None:
+        if not video_path.exists():
+            QMessageBox.warning(self, "Video Missing", f"Could not find video file:\n{video_path}")
+            return
         system = platform.system().lower()
         try:
             if system == "darwin":
@@ -112,14 +126,15 @@ class DirectionDialog(QDialog):
                 os.startfile(video_path)  # type: ignore[attr-defined]
             else:
                 subprocess.Popen(["xdg-open", str(video_path)])
-        except Exception:
-            pass
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Failed", f"Could not open the video in an external player.\n{exc}")
 
 
 class AngleDecisionDialog(QDialog):
     def __init__(self, tipper: TipperInfo, parent=None):
         super().__init__(parent)
         self._result: Optional[str] = tipper.result
+        self.setWindowModality(Qt.WindowModal)
         self.setWindowTitle("Tipper Angle Review")
         layout = QVBoxLayout()
         layout.addWidget(QLabel(f"Tipper: {tipper.path.name}"))
@@ -143,6 +158,9 @@ class AngleDecisionDialog(QDialog):
         layout.addLayout(buttons)
 
         cancel_box = QDialogButtonBox(QDialogButtonBox.Cancel)
+        cancel_btn = cancel_box.button(QDialogButtonBox.Cancel)
+        if cancel_btn:
+            cancel_btn.setText("Abort Run")
         cancel_box.rejected.connect(self.reject)
         layout.addWidget(cancel_box)
         self.setLayout(layout)
@@ -165,7 +183,9 @@ class ConflictDialog(QDialog):
     ):
         super().__init__(parent)
         self._resolution = ConflictResolution(action="abort")
+        self.setWindowModality(Qt.WindowModal)
         self.setWindowTitle("Direction Conflict")
+        self.setMinimumWidth(760)
         layout = QVBoxLayout()
         layout.addWidget(
             QLabel(f"Video {video.path.name} ({video.direction}) vs tipper {tipper.path.name} ({tipper.direction})")
@@ -210,7 +230,10 @@ class ConflictDialog(QDialog):
         actions.addWidget(abort_btn)
         layout.addLayout(actions)
 
-        close_box = QDialogButtonBox(QDialogButtonBox.Close)
+        close_box = QDialogButtonBox(QDialogButtonBox.Cancel)
+        cancel_btn = close_box.button(QDialogButtonBox.Cancel)
+        if cancel_btn:
+            cancel_btn.setText("Abort Run")
         close_box.rejected.connect(self.reject)
         layout.addWidget(close_box)
 
