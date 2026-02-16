@@ -524,9 +524,12 @@ class MainWindow(QMainWindow):
         self.logfile_edit.setReadOnly(True)
         self.logfile_hint = QLabel("Saved as run.log in Reports directory")
         logfile_row = QVBoxLayout()
+        logfile_row.setContentsMargins(0, 0, 0, 0)
+        logfile_row.setSpacing(4)
         logfile_row.addWidget(self.logfile_edit)
         logfile_row.addWidget(self.logfile_hint)
-        form.addRow(self.save_log_checkbox, logfile_row)
+        form.addRow("", self.save_log_checkbox)
+        form.addRow("Log file path:", logfile_row)
 
         self.report_dir_edit = QLineEdit(str(Path("run_reports")))
         report_button = QPushButton("Browse")
@@ -592,7 +595,47 @@ class MainWindow(QMainWindow):
             line_edit.setText(path)
 
     def _show_error(self, message: str) -> None:
-        QMessageBox.critical(self, "Validation Error", message)
+        self._show_message_box(QMessageBox.Critical, "Validation Error", message)
+
+    def _show_message_box(
+        self,
+        icon: QMessageBox.Icon,
+        title: str,
+        text: str,
+        buttons: QMessageBox.StandardButtons = QMessageBox.Ok,
+        default_button: QMessageBox.StandardButton = QMessageBox.Ok,
+    ) -> QMessageBox.StandardButton:
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setStandardButtons(buttons)
+        box.setDefaultButton(default_button)
+        box.setStyleSheet(
+            """
+            QMessageBox {
+                background: #F7F9FD;
+            }
+            QMessageBox QLabel {
+                color: #102A61;
+                font-size: 12pt;
+            }
+            QMessageBox QPushButton {
+                min-width: 84px;
+                min-height: 32px;
+                border-radius: 8px;
+                border: 1px solid #D5DDEB;
+                background: #FFFFFF;
+                color: #17366F;
+                font-weight: 600;
+                padding: 0 12px;
+            }
+            QMessageBox QPushButton:hover {
+                background: #EEF2F9;
+            }
+            """
+        )
+        return QMessageBox.StandardButton(box.exec())
 
     def _sync_log_destination_preview(self) -> None:
         report_dir_text = self.report_dir_edit.text().strip() or "run_reports"
@@ -963,7 +1006,7 @@ class MainWindow(QMainWindow):
             )
         if report_dir:
             msg_lines.append(f"Reports written to: {report_dir}")
-        QMessageBox.information(self, "Finished", "\n".join(msg_lines))
+        self._show_message_box(QMessageBox.Information, "Finished", "\n".join(msg_lines))
 
     @Slot(str)
     def _on_error(self, details: str) -> None:
@@ -971,15 +1014,15 @@ class MainWindow(QMainWindow):
         self._cleanup_worker_thread()
         self._set_ui_running_state(False)
         self._cancel_requested = True
-        QMessageBox.critical(self, "Error", details)
+        self._show_message_box(QMessageBox.Critical, "Error", details)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt API name)
         if not self._is_running:
             event.accept()
             return
 
-        choice = QMessageBox.question(
-            self,
+        choice = self._show_message_box(
+            QMessageBox.Question,
             "Cancel Run?",
             "A run is in progress. Cancel it and close the app?",
             QMessageBox.Yes | QMessageBox.No,
@@ -993,7 +1036,11 @@ class MainWindow(QMainWindow):
         if self.thread and self.thread.isRunning():
             self.thread.quit()
             if not self.thread.wait(5000):
-                QMessageBox.warning(self, "Still Running", "Processing is still shutting down. Try again shortly.")
+                self._show_message_box(
+                    QMessageBox.Warning,
+                    "Still Running",
+                    "Processing is still shutting down. Try again shortly.",
+                )
                 event.ignore()
                 return
         event.accept()

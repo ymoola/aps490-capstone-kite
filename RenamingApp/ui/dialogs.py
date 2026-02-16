@@ -30,6 +30,63 @@ except Exception:
 from RenamingApp.core.models import ConflictResolution, TipperInfo, VideoInfo
 
 
+def _apply_dialog_theme(dialog: QDialog) -> None:
+    dialog.setStyleSheet(
+        """
+        QDialog {
+            background: #F7F9FD;
+            color: #102A61;
+        }
+        QLabel {
+            color: #102A61;
+            font-size: 12pt;
+        }
+        QComboBox {
+            background: #FFFFFF;
+            color: #102A61;
+            border: 1px solid #C9D5EA;
+            border-radius: 6px;
+            padding: 4px 8px;
+            min-height: 28px;
+        }
+        QComboBox::drop-down {
+            border: none;
+            width: 22px;
+            background: #EEF2F9;
+            border-top-right-radius: 6px;
+            border-bottom-right-radius: 6px;
+        }
+        QComboBox::down-arrow {
+            image: none;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid #17366F;
+            margin-right: 6px;
+        }
+        QComboBox QAbstractItemView {
+            background: #FFFFFF;
+            color: #102A61;
+            border: 1px solid #C9D5EA;
+            selection-background-color: #18366F;
+            selection-color: #FFFFFF;
+            outline: none;
+        }
+        QPushButton {
+            min-height: 34px;
+            border-radius: 8px;
+            border: 1px solid #D5DDEB;
+            background: #FFFFFF;
+            color: #17366F;
+            font-weight: 600;
+            padding: 0 14px;
+        }
+        QPushButton:hover {
+            background: #EEF2F9;
+        }
+        """
+    )
+
+
 class DirectionDialog(QDialog):
     def __init__(self, video_path: Path, message: str, parent=None):
         super().__init__(parent)
@@ -38,8 +95,11 @@ class DirectionDialog(QDialog):
         self.setModal(False)
         self.setWindowTitle("Direction Needed")
         self.setMinimumWidth(640)
+        _apply_dialog_theme(self)
         layout = QVBoxLayout()
-        layout.addWidget(QLabel(message))
+        message_label = QLabel(message)
+        message_label.setWordWrap(True)
+        layout.addWidget(message_label)
         layout.addWidget(QLabel(f"Video: {video_path.name}"))
 
         self._add_preview_section(layout, video_path)
@@ -138,6 +198,7 @@ class AngleDecisionDialog(QDialog):
         self.setWindowModality(Qt.NonModal)
         self.setModal(False)
         self.setWindowTitle("Tipper Angle Review")
+        _apply_dialog_theme(self)
         layout = QVBoxLayout()
         layout.addWidget(QLabel(f"Tipper: {tipper.path.name}"))
         layout.addWidget(QLabel("Angle is 0 and result is undecided (U)."))
@@ -189,6 +250,7 @@ class ConflictDialog(QDialog):
         self.setModal(False)
         self.setWindowTitle("Direction Conflict")
         self.setMinimumWidth(760)
+        _apply_dialog_theme(self)
         layout = QVBoxLayout()
         layout.addWidget(
             QLabel(f"Video {video.path.name} ({video.direction}) vs tipper {tipper.path.name} ({tipper.direction})")
@@ -205,11 +267,15 @@ class ConflictDialog(QDialog):
         self.video_dir_combo = QComboBox()
         self.video_dir_combo.addItems(["D", "U"])
         self.video_dir_combo.setCurrentText(video.direction)
+        self.video_dir_combo.setMinimumWidth(140)
+        self.video_dir_combo.view().setMinimumWidth(140)
         form.addRow("Correct video to:", self.video_dir_combo)
 
         self.tipper_dir_combo = QComboBox()
         self.tipper_dir_combo.addItems(["D", "U"])
         self.tipper_dir_combo.setCurrentText(video.direction)
+        self.tipper_dir_combo.setMinimumWidth(140)
+        self.tipper_dir_combo.view().setMinimumWidth(140)
         form.addRow("Correct tipper to:", self.tipper_dir_combo)
         layout.addLayout(form)
 
