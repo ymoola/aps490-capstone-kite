@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -29,7 +30,7 @@ class MappingEntry:
     sub: str
     shoe: str
     trial_number: Optional[float]
-    angle: Optional[float]
+    angle: Optional[int]
     ice_temperature_degC: Optional[float]
     air_humidity_rh: Optional[float]
     air_temperature_degC: Optional[float]
@@ -54,6 +55,15 @@ class TipperMatMetadata:
 def _safe_float(value: object) -> Optional[float]:
     try:
         return float(value)
+    except Exception:
+        return None
+
+
+def _round_half_up_to_int(value: Optional[float]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     except Exception:
         return None
 
@@ -152,7 +162,7 @@ class ReportCollector:
                 sub=effective_sub,
                 shoe=shoe,
                 trial_number=metadata.trial_number,
-                angle=metadata.angle,
+                angle=_round_half_up_to_int(metadata.angle),
                 ice_temperature_degC=metadata.ice_temperature_degC,
                 air_humidity_rh=metadata.air_humidity_rh,
                 air_temperature_degC=metadata.air_temperature_degC,
