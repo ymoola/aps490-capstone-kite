@@ -17,17 +17,18 @@ def _ids_from_tipper(tipper: TipperInfo) -> Tuple[str, str]:
 
 def _signature_from_tipper(tipper: TipperInfo) -> str:
     parts = tipper.path.stem.split("_")
-    # Use a stable identity that survives tipper filename mutations done during
-    # processing (direction token updates, angle insertion, etc.).
-    # Expected formats:
+    # Stable identity across supported name variants:
     #   shoe_sub_DP_GP1_HH-MM-SS
     #   shoe_sub_DP_angle_GP1_HH-MM-SS
-    # Stable fields across both formats are shoe, sub, camera token, and time.
-    if len(parts) >= 5:
+    #   shoe_sub_DP_angle_HH-MM-SS
+    #   shoe_sub_DP_HH-MM-SS
+    if len(parts) >= 4:
         shoe = parts[0]
         sub = parts[1]
-        camera = parts[-2]
         time_token = parts[-1]
+        camera = ""
+        if len(parts) >= 5 and parts[-2].upper().startswith("GP"):
+            camera = parts[-2]
         return "|".join([shoe, sub, camera, time_token])
     return tipper.path.stem
 

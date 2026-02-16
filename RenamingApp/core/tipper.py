@@ -13,6 +13,50 @@ _VALID_DIRECTIONS = {"D", "U"}
 _VALID_RESULTS = {"P", "F", "U"}
 
 
+def _parse_tipper_stem_tokens(stem: str, log: Optional[LogFn] = None) -> Optional[tuple]:
+    logger = log or (lambda _: None)
+    parts = stem.split("_")
+    # Supported examples:
+    #   shoe_sub_DP_GP1_HH-MM-SS
+    #   shoe_sub_DP_angle_GP1_HH-MM-SS
+    #   shoe_sub_DP_angle_HH-MM-SS
+    #   shoe_sub_DP_HH-MM-SS
+    if len(parts) < 4:
+        logger(f"[WARN] Skipping malformed tipper filename: {stem}")
+        return None
+
+    participant = parts[1].strip()
+    if not participant:
+        logger(f"[WARN] Skipping tipper with empty participant token: {stem}")
+        return None
+
+    dir_result = parts[2].strip().upper()
+    if len(dir_result) < 1:
+        logger(f"[WARN] Skipping tipper with invalid direction/result token: {stem}")
+        return None
+
+    direction = dir_result[0]
+    result = dir_result[1] if len(dir_result) >= 2 else "U"
+    if direction not in _VALID_DIRECTIONS:
+        logger(f"[WARN] Skipping tipper with unsupported direction '{direction}': {stem}")
+        return None
+    if result not in _VALID_RESULTS:
+        logger(f"[WARN] Skipping tipper with unsupported result '{result}': {stem}")
+        return None
+
+    time_token = parts[-1]
+    # Angle token can be token 4 in either:
+    #   shoe_sub_DP_angle_HH-MM-SS
+    #   shoe_sub_DP_angle_GP1_HH-MM-SS
+    angle: Optional[float] = None
+    if len(parts) >= 5:
+        maybe_angle = parse_float(parts[3])
+        if maybe_angle is not None:
+            angle = maybe_angle
+
+    return participant, direction, result, angle, time_token
+
+
 def parse_tipper_file(path: Path, log: Optional[LogFn] = None) -> Optional[TipperInfo]:
     name = path.name
     logger = log or (lambda _: None)
@@ -20,38 +64,16 @@ def parse_tipper_file(path: Path, log: Optional[LogFn] = None) -> Optional[Tippe
         return None
 
     stem = name[:-4]
-    parts = stem.split("_")
-    if len(parts) < 5:
-        logger(f"[WARN] Skipping malformed tipper filename: {name}")
+    parsed = _parse_tipper_stem_tokens(stem, logger)
+    if not parsed:
         return None
-
-    participant = parts[1].strip()
-    if not participant:
-        logger(f"[WARN] Skipping tipper with empty participant token: {name}")
-        return None
-
-    dir_result = parts[2].strip().upper()
-    if len(dir_result) < 1:
-        logger(f"[WARN] Skipping tipper with invalid direction/result token: {name}")
-        return None
-
-    direction = dir_result[0]
-    result = dir_result[1] if len(dir_result) >= 2 else "U"
-    if direction not in _VALID_DIRECTIONS:
-        logger(f"[WARN] Skipping tipper with unsupported direction '{direction}': {name}")
-        return None
-    if result not in _VALID_RESULTS:
-        logger(f"[WARN] Skipping tipper with unsupported result '{result}': {name}")
-        return None
-
-    angle = parse_float(parts[3]) if len(parts) >= 4 else None
+    participant, direction, result, angle, time_token = parsed
     if angle is None:
         angle_str = extract_angle_from_mat(path, logger)
         if angle_str is not None:
             angle = float(angle_str)
             path = insert_angle_into_filename(path, angle_str, logger)
 
-    time_token = parts[-1]
     time_tuple = parse_time_token(time_token)
     return TipperInfo(
         path=path,
@@ -168,25 +190,11 @@ def _parse_tipper_for_preview(path: Path, log: LogFn) -> Optional[TipperInfo]:
     Lightweight parser for date-level preview.
     It intentionally avoids mutating files (no angle extraction/renaming).
     """
-    stem = path.stem
-    parts = stem.split("_")
-    if len(parts) < 5:
-        log(f"[WARN] Skipping malformed tipper filename in preview: {path.name}")
+    parsed = _parse_tipper_stem_tokens(path.stem, log)
+    if not parsed:
         return None
-    participant = parts[1].strip()
-    if not participant:
-        return None
-
-    dir_result = parts[2].strip().upper()
-    if len(dir_result) < 1:
-        return None
-    direction = dir_result[0]
-    result = dir_result[1].upper() if len(dir_result) >= 2 else "U"
-    if direction not in _VALID_DIRECTIONS or result not in _VALID_RESULTS:
-        return None
-
-    angle = parse_float(parts[3]) if len(parts) >= 4 else None
-    time_tuple = parse_time_token(parts[-1])
+    participant, direction, result, angle, time_token = parsed
+    time_tuple = parse_time_token(time_token)
     return TipperInfo(
         path=path,
         direction=direction,
