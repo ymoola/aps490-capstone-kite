@@ -3,11 +3,12 @@ from __future__ import annotations
 import traceback
 from concurrent.futures import Future, TimeoutError
 from pathlib import Path
+import sys
 from threading import Event
 from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -167,10 +168,14 @@ class MainWindow(QMainWindow):
         self._current_report_dir: Optional[Path] = None
         self._active_hitl_dialogs: List[QDialog] = []
         self._build_ui()
+        self._apply_theme()
 
     def _build_ui(self) -> None:
         container = QWidget()
+        container.setObjectName("RootContainer")
         root_layout = QVBoxLayout()
+        root_layout.setContentsMargins(16, 16, 16, 16)
+        root_layout.setSpacing(12)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_run_tab(), "Run")
@@ -186,14 +191,19 @@ class MainWindow(QMainWindow):
     def _build_run_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(4, 6, 4, 4)
+        layout.setSpacing(12)
 
+        layout.addWidget(self._build_brand_header())
         layout.addWidget(self._build_paths_group())
         layout.addWidget(self._build_run_options_group())
         layout.addWidget(self._build_log_group())
 
         buttons_layout = QHBoxLayout()
         self.run_button = QPushButton("Run")
+        self.run_button.setObjectName("PrimaryButton")
         self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setObjectName("SecondaryDanger")
         self.cancel_button.setEnabled(False)
         buttons_layout.addWidget(self.run_button)
         buttons_layout.addWidget(self.cancel_button)
@@ -206,12 +216,255 @@ class MainWindow(QMainWindow):
         tab.setLayout(layout)
         return tab
 
+    def _resource_path(self, filename: str) -> Path:
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+        return base_dir / "resources" / filename
+
+    def _build_brand_header(self) -> QWidget:
+        header = QWidget()
+        header.setObjectName("BrandHeader")
+        layout = QHBoxLayout()
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(16)
+
+        logo_label = QLabel()
+        logo_label.setObjectName("LogoLabel")
+        logo_label.setMinimumWidth(250)
+        logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        logo_path = self._resource_path("UHN_logo.png")
+        logo_pixmap = QPixmap(str(logo_path))
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(
+                logo_pixmap.scaledToHeight(56, Qt.SmoothTransformation)
+            )
+        else:
+            logo_label.setText("UHN")
+
+        text_layout = QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(3)
+        title = QLabel("Tipper Video Renaming")
+        title.setObjectName("HeroTitle")
+        subtitle = QLabel("Research Workflow Console")
+        subtitle.setObjectName("HeroSubtitle")
+        text_layout.addWidget(title)
+        text_layout.addWidget(subtitle)
+
+        badge = QLabel("GoPro + MATLAB")
+        badge.setObjectName("HeroBadge")
+        badge.setAlignment(Qt.AlignCenter)
+
+        layout.addWidget(logo_label, 0)
+        layout.addLayout(text_layout, 1)
+        layout.addWidget(badge, 0)
+        header.setLayout(layout)
+        return header
+
+    def _apply_theme(self) -> None:
+        self.setStyleSheet(
+            """
+            QWidget {
+                color: #172B4D;
+                font-family: "Trebuchet MS";
+                font-size: 11pt;
+            }
+
+            QMainWindow, QWidget#RootContainer {
+                background-color: #F4F6FB;
+            }
+
+            QTabWidget::pane {
+                border: 1px solid #D8DFEC;
+                border-radius: 12px;
+                background: #FFFFFF;
+                top: -1px;
+            }
+
+            QTabBar::tab {
+                background: #E8EDF6;
+                color: #1D376F;
+                padding: 8px 16px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 4px;
+            }
+
+            QTabBar::tab:selected {
+                background: #18366F;
+                color: #FFFFFF;
+            }
+
+            QTabBar::tab:hover:!selected {
+                background: #DDE5F3;
+            }
+
+            QWidget#BrandHeader {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:1 #EEF2F9);
+                border: 1px solid #D5DDEB;
+                border-radius: 14px;
+            }
+
+            QLabel#HeroTitle {
+                font-size: 19px;
+                font-weight: 700;
+                color: #102A61;
+            }
+
+            QLabel#HeroSubtitle {
+                color: #556A86;
+                font-size: 11px;
+            }
+
+            QLabel#HeroBadge {
+                background: #FDE6ED;
+                border: 1px solid #F7CAD9;
+                border-radius: 10px;
+                color: #B71546;
+                padding: 6px 10px;
+                font-weight: 600;
+            }
+
+            QLabel#PreviewDate {
+                color: #102A61;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            QLabel#PreviewStats {
+                color: #556A86;
+                font-size: 11px;
+            }
+
+            QGroupBox#CardGroup {
+                background: #FFFFFF;
+                border: 1px solid #D8DFEC;
+                border-radius: 12px;
+                margin-top: 12px;
+                font-weight: 600;
+                color: #112D67;
+                padding-top: 8px;
+            }
+
+            QGroupBox#CardGroup::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+            }
+
+            QLineEdit, QPlainTextEdit, QTableView {
+                background: #FFFFFF;
+                border: 1px solid #CCD6E6;
+                border-radius: 8px;
+                padding: 6px 8px;
+                selection-background-color: #18366F;
+                selection-color: #FFFFFF;
+            }
+
+            QLineEdit:focus, QPlainTextEdit:focus, QTableView:focus {
+                border: 1px solid #B71546;
+            }
+
+            QPushButton {
+                min-height: 32px;
+                border-radius: 8px;
+                padding: 0 14px;
+                font-weight: 600;
+            }
+
+            QPushButton#PrimaryButton {
+                background: #BA1545;
+                color: #FFFFFF;
+                border: 1px solid #A3133D;
+            }
+
+            QPushButton#PrimaryButton:hover {
+                background: #A3133D;
+            }
+
+            QPushButton#PrimaryButton:disabled {
+                background: #E6B1C3;
+                border: 1px solid #E6B1C3;
+                color: #FFFFFF;
+            }
+
+            QPushButton#SecondaryButton {
+                background: #EEF2F9;
+                color: #17366F;
+                border: 1px solid #CED8E7;
+            }
+
+            QPushButton#SecondaryButton:hover {
+                background: #E1E9F4;
+            }
+
+            QPushButton#SecondaryDanger {
+                background: #FFFFFF;
+                color: #9B1A44;
+                border: 1px solid #E6BED0;
+            }
+
+            QPushButton#SecondaryDanger:hover {
+                background: #FFF3F7;
+            }
+
+            QCheckBox {
+                spacing: 8px;
+            }
+
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+
+            QCheckBox::indicator:unchecked {
+                border: 1px solid #9FB2CF;
+                border-radius: 4px;
+                background: #FFFFFF;
+            }
+
+            QCheckBox::indicator:checked {
+                border: 1px solid #BA1545;
+                border-radius: 4px;
+                background: #BA1545;
+            }
+
+            QProgressBar {
+                border: 1px solid #CCD6E6;
+                border-radius: 8px;
+                background: #EEF2F9;
+                text-align: center;
+                color: #17366F;
+                font-weight: 600;
+            }
+
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #BA1545, stop:1 #8F1747);
+                border-radius: 7px;
+            }
+
+            QHeaderView::section {
+                background: #EEF2F9;
+                color: #17366F;
+                border: none;
+                border-right: 1px solid #D8DFEC;
+                border-bottom: 1px solid #D8DFEC;
+                padding: 6px;
+                font-weight: 600;
+            }
+            """
+        )
+
     def _build_tipper_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         self.preview_date_label = QLabel("Current date: -")
+        self.preview_date_label.setObjectName("PreviewDate")
         self.preview_stats_label = QLabel("Status: no tippers loaded")
+        self.preview_stats_label.setObjectName("PreviewStats")
         layout.addWidget(self.preview_date_label)
         layout.addWidget(self.preview_stats_label)
 
@@ -235,10 +488,12 @@ class MainWindow(QMainWindow):
 
     def _build_paths_group(self) -> QWidget:
         group = QGroupBox("Folders")
+        group.setObjectName("CardGroup")
         form = QFormLayout()
 
         self.videos_edit = QLineEdit(str(Path("Videos")))
         videos_button = QPushButton("Browse")
+        videos_button.setObjectName("SecondaryButton")
         videos_button.clicked.connect(lambda: self._choose_dir(self.videos_edit))
         videos_row = QHBoxLayout()
         videos_row.addWidget(self.videos_edit)
@@ -247,6 +502,7 @@ class MainWindow(QMainWindow):
 
         self.tippers_edit = QLineEdit(str(Path("Tipper")))
         tippers_button = QPushButton("Browse")
+        tippers_button.setObjectName("SecondaryButton")
         tippers_button.clicked.connect(lambda: self._choose_dir(self.tippers_edit))
         tippers_row = QHBoxLayout()
         tippers_row.addWidget(self.tippers_edit)
@@ -255,6 +511,7 @@ class MainWindow(QMainWindow):
 
         self.output_edit = QLineEdit(str(Path("Videos_renamed_final")))
         output_button = QPushButton("Browse")
+        output_button.setObjectName("SecondaryButton")
         output_button.clicked.connect(lambda: self._choose_dir(self.output_edit))
         output_row = QHBoxLayout()
         output_row.addWidget(self.output_edit)
@@ -273,6 +530,7 @@ class MainWindow(QMainWindow):
 
         self.report_dir_edit = QLineEdit(str(Path("run_reports")))
         report_button = QPushButton("Browse")
+        report_button.setObjectName("SecondaryButton")
         report_button.clicked.connect(lambda: self._choose_dir(self.report_dir_edit))
         report_row = QHBoxLayout()
         report_row.addWidget(self.report_dir_edit)
@@ -301,6 +559,7 @@ class MainWindow(QMainWindow):
 
     def _build_run_options_group(self) -> QWidget:
         group = QGroupBox("Options")
+        group.setObjectName("CardGroup")
         layout = QVBoxLayout()
         self.dry_run_checkbox = QCheckBox("Dry run (preview changes only, no file copy/rename)")
         self.dry_run_checkbox.setChecked(DEFAULT_DRY_RUN)
@@ -312,6 +571,7 @@ class MainWindow(QMainWindow):
 
     def _build_log_group(self) -> QWidget:
         group = QGroupBox("Progress")
+        group.setObjectName("CardGroup")
         layout = QVBoxLayout()
         self.log_panel = LogPanel()
         layout.addWidget(self.log_panel)
