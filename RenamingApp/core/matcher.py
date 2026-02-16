@@ -127,7 +127,14 @@ def rename_and_copy(
     if dry_run:
         log(f"  [DRY] {video.path.name} -> {target}")
         if reporter:
-            reporter.record_mapping(date, sub, video.path.name, target.name, dry_run=True)
+            reporter.record_mapping(
+                date=date,
+                sub=sub,
+                tipper=tipper,
+                original_video=video.path.name,
+                renamed_video=target.name,
+                dry_run=True,
+            )
         return True
 
     try:
@@ -151,7 +158,14 @@ def rename_and_copy(
 
     log(f"  Copied {video.path.name} -> {target.name}")
     if reporter:
-        reporter.record_mapping(date, sub, video.path.name, target.name, dry_run=False)
+        reporter.record_mapping(
+            date=date,
+            sub=sub,
+            tipper=tipper,
+            original_video=video.path.name,
+            renamed_video=target.name,
+            dry_run=False,
+        )
     return True
 
 
