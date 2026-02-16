@@ -73,6 +73,9 @@ class HitlCallbacks:
     choose_direction: Callable[[Path, str], Optional[str]]
     decide_angle_zero: Callable[[TipperInfo], Optional[str]]
     resolve_conflict: Callable[[VideoInfo, TipperInfo, Optional[TipperInfo]], ConflictResolution]
+    on_date_tippers_loaded: Optional[Callable[[str, List[TipperInfo]], None]] = None
+    on_current_tipper_changed: Optional[Callable[[str, TipperInfo], None]] = None
+    on_tipper_status_changed: Optional[Callable[[str, TipperInfo, str], None]] = None
 
 
 @dataclass

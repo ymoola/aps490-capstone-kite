@@ -4,11 +4,12 @@ import traceback
 from concurrent.futures import Future, TimeoutError
 from pathlib import Path
 from threading import Event
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QDoubleSpinBox,
@@ -16,13 +17,16 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QLineEdit,
+    QHeaderView,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QProgressBar,
     QSpinBox,
+    QTableView,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -34,10 +38,12 @@ from RenamingApp.core.models import (
     ProcessSummary,
     ProcessingCancelled,
     RunConfig,
+    TipperInfo,
 )
 from RenamingApp.core.reporting import ReportCollector
 from RenamingApp.ui.dialogs import AngleDecisionDialog, ConflictDialog, DirectionDialog
 from RenamingApp.ui.progress import LogPanel
+from RenamingApp.ui.tipper_table import TipperTableModel
 
 
 class ProcessingWorker(QObject):
@@ -50,6 +56,10 @@ class ProcessingWorker(QObject):
     request_direction = Signal(object, str, object)
     request_angle = Signal(object, object)
     request_conflict = Signal(object, object, object, object)
+
+    date_tippers_loaded = Signal(str, object)
+    current_tipper_changed = Signal(str, object)
+    tipper_status_changed = Signal(str, object, str)
 
     def __init__(self, config: RunConfig, report_dir: Path):
         super().__init__()
@@ -72,6 +82,9 @@ class ProcessingWorker(QObject):
                 choose_direction=self._prompt_direction,
                 decide_angle_zero=self._decide_angle_zero,
                 resolve_conflict=self._resolve_conflict,
+                on_date_tippers_loaded=self._emit_date_tippers_loaded,
+                on_current_tipper_changed=self._emit_current_tipper_changed,
+                on_tipper_status_changed=self._emit_tipper_status_changed,
             )
             summary = process_all(
                 self.config,
@@ -102,6 +115,15 @@ class ProcessingWorker(QObject):
 
     def _log(self, message: str) -> None:
         self.log.emit(message)
+
+    def _emit_date_tippers_loaded(self, date: str, tippers: List[TipperInfo]) -> None:
+        self.date_tippers_loaded.emit(date, tippers)
+
+    def _emit_current_tipper_changed(self, date: str, tipper: TipperInfo) -> None:
+        self.current_tipper_changed.emit(date, tipper)
+
+    def _emit_tipper_status_changed(self, date: str, tipper: TipperInfo, status: str) -> None:
+        self.tipper_status_changed.emit(date, tipper, status)
 
     def _prompt_direction(self, video_path: Path, message: str) -> Optional[str]:
         future: Future[Optional[str]] = Future()
@@ -141,10 +163,26 @@ class MainWindow(QMainWindow):
         self._cancel_requested = False
         self._is_running = False
         self._current_report_dir: Optional[Path] = None
+        self._active_hitl_dialogs: List[QDialog] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
         container = QWidget()
+        root_layout = QVBoxLayout()
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_run_tab(), "Run")
+        self.tabs.addTab(self._build_tipper_tab(), "Tipper Preview")
+
+        root_layout.addWidget(self.tabs)
+        container.setLayout(root_layout)
+        self.setCentralWidget(container)
+
+        self.run_button.clicked.connect(self._start_run)
+        self.cancel_button.clicked.connect(self._cancel_run)
+
+    def _build_run_tab(self) -> QWidget:
+        tab = QWidget()
         layout = QVBoxLayout()
 
         layout.addWidget(self._build_paths_group())
@@ -163,11 +201,35 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 1)
         layout.addWidget(self.progress_bar)
 
-        container.setLayout(layout)
-        self.setCentralWidget(container)
+        tab.setLayout(layout)
+        return tab
 
-        self.run_button.clicked.connect(self._start_run)
-        self.cancel_button.clicked.connect(self._cancel_run)
+    def _build_tipper_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout()
+
+        self.preview_date_label = QLabel("Current date: -")
+        self.preview_stats_label = QLabel("Status: no tippers loaded")
+        layout.addWidget(self.preview_date_label)
+        layout.addWidget(self.preview_stats_label)
+
+        self.tipper_model = TipperTableModel(self)
+        self.tipper_table = QTableView()
+        self.tipper_table.setModel(self.tipper_model)
+        self.tipper_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tipper_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tipper_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tipper_table.setAlternatingRowColors(True)
+        self.tipper_table.verticalHeader().setVisible(False)
+
+        header = self.tipper_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in range(1, self.tipper_model.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+
+        layout.addWidget(self.tipper_table)
+        tab.setLayout(layout)
+        return tab
 
     def _build_paths_group(self) -> QWidget:
         group = QGroupBox("Folders")
@@ -408,6 +470,11 @@ class MainWindow(QMainWindow):
             self._show_error(f"Cannot create reports directory: {exc}")
             return False
 
+    def _reset_tipper_preview(self) -> None:
+        self.tipper_model.clear()
+        self.preview_date_label.setText("Current date: -")
+        self.preview_stats_label.setText("Status: no tippers loaded")
+
     def _start_run(self) -> None:
         if self._is_running:
             return
@@ -422,6 +489,7 @@ class MainWindow(QMainWindow):
         if not self._initialize_report_dir(report_dir):
             return
 
+        self._reset_tipper_preview()
         self.log_panel.append_line("Starting run...")
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
@@ -442,10 +510,23 @@ class MainWindow(QMainWindow):
         self.worker.request_angle.connect(self._handle_angle_request)
         self.worker.request_conflict.connect(self._handle_conflict_request)
 
+        self.worker.date_tippers_loaded.connect(self._handle_date_tippers_loaded)
+        self.worker.current_tipper_changed.connect(self._handle_current_tipper_changed)
+        self.worker.tipper_status_changed.connect(self._handle_tipper_status_changed)
+
         self.thread.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
         self._set_ui_running_state(True)
         self.thread.start()
+
+    def _close_active_hitl_dialogs(self) -> None:
+        dialogs = list(self._active_hitl_dialogs)
+        self._active_hitl_dialogs.clear()
+        for dialog in dialogs:
+            try:
+                dialog.close()
+            except Exception:
+                pass
 
     def _cancel_run(self) -> None:
         if not self._is_running:
@@ -455,52 +536,145 @@ class MainWindow(QMainWindow):
             self.log_panel.append_line("Cancellation requested...")
         self.cancel_button.setEnabled(False)
         self._cancel_requested = True
+        self._close_active_hitl_dialogs()
 
     def _set_future_result(self, future: Future[object], value: object) -> None:
         if not future.done():
             future.set_result(value)
 
     def _abort_from_dialog(self, reason: str) -> None:
+        if self._cancel_requested:
+            return
         self.log_panel.append_line(reason)
         self._cancel_requested = True
         if self.worker:
             self.worker.cancel()
+
+    def _register_hitl_dialog(self, dialog: QDialog) -> None:
+        self._active_hitl_dialogs.append(dialog)
+
+        def _on_finished(_: int) -> None:
+            if dialog in self._active_hitl_dialogs:
+                self._active_hitl_dialogs.remove(dialog)
+            dialog.deleteLater()
+
+        dialog.finished.connect(_on_finished)
 
     @Slot(object, str, object)
     def _handle_direction_request(self, video_path: Path, message: str, future: Future) -> None:
         if future.done() or not self._is_running:
             return
         dialog = DirectionDialog(video_path, message, self)
-        result = dialog.exec()
-        if result != QDialog.Accepted:
-            self._abort_from_dialog("Direction prompt cancelled by user; aborting run.")
-            self._set_future_result(future, None)
-            return
-        self._set_future_result(future, dialog.selected_direction())
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.setModal(False)
+
+        def _on_finished(result: int) -> None:
+            if future.done():
+                return
+            if result != QDialog.Accepted:
+                self._abort_from_dialog("Direction prompt cancelled by user; aborting run.")
+                self._set_future_result(future, None)
+                return
+            self._set_future_result(future, dialog.selected_direction())
+
+        dialog.finished.connect(_on_finished)
+        self._register_hitl_dialog(dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     @Slot(object, object)
     def _handle_angle_request(self, tipper, future: Future) -> None:
         if future.done() or not self._is_running:
             return
         dialog = AngleDecisionDialog(tipper, self)
-        result = dialog.exec()
-        if result != QDialog.Accepted:
-            self._abort_from_dialog("Tipper review cancelled by user; aborting run.")
-            self._set_future_result(future, tipper.result)
-            return
-        self._set_future_result(future, dialog.decision())
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.setModal(False)
+
+        def _on_finished(result: int) -> None:
+            if future.done():
+                return
+            if result != QDialog.Accepted:
+                self._abort_from_dialog("Tipper review cancelled by user; aborting run.")
+                self._set_future_result(future, tipper.result)
+                return
+            self._set_future_result(future, dialog.decision())
+
+        dialog.finished.connect(_on_finished)
+        self._register_hitl_dialog(dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     @Slot(object, object, object, object)
     def _handle_conflict_request(self, video, tipper, next_tipper, future: Future) -> None:
         if future.done() or not self._is_running:
             return
         dialog = ConflictDialog(video, tipper, next_tipper, self)
-        result = dialog.exec()
-        if result != QDialog.Accepted:
-            self._abort_from_dialog("Conflict dialog cancelled by user; aborting run.")
-            self._set_future_result(future, ConflictResolution(action="abort"))
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.setModal(False)
+
+        def _on_finished(result: int) -> None:
+            if future.done():
+                return
+            if result != QDialog.Accepted:
+                self._abort_from_dialog("Conflict dialog cancelled by user; aborting run.")
+                self._set_future_result(future, ConflictResolution(action="abort"))
+                return
+            self._set_future_result(future, dialog.resolution())
+
+        dialog.finished.connect(_on_finished)
+        self._register_hitl_dialog(dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _update_preview_stats(self) -> None:
+        counts = self.tipper_model.status_counts()
+        total = self.tipper_model.total_rows()
+        if not total:
+            self.preview_stats_label.setText("Status: no tippers loaded")
             return
-        self._set_future_result(future, dialog.resolution())
+        ordered = ["Pending", "Current", "Matched", "Skipped", "Corrected", "Unmatched"]
+        parts = [f"{name}: {counts.get(name, 0)}" for name in ordered if counts.get(name, 0) > 0 or name == "Pending"]
+        self.preview_stats_label.setText(f"Rows: {total} | " + " | ".join(parts))
+
+    def _scroll_to_row(self, row: int) -> None:
+        if row < 0:
+            return
+        index = self.tipper_model.index(row, 0)
+        if not index.isValid():
+            return
+        self.tipper_table.scrollTo(index, QAbstractItemView.PositionAtCenter)
+        self.tipper_table.selectRow(row)
+
+    @Slot(str, object)
+    def _handle_date_tippers_loaded(self, date: str, tippers_obj: object) -> None:
+        if isinstance(tippers_obj, list):
+            tippers = [t for t in tippers_obj if isinstance(t, TipperInfo)]
+        else:
+            tippers = []
+        self.tipper_model.set_date_tippers(date, tippers)
+        self.preview_date_label.setText(f"Current date: {date}")
+        self._update_preview_stats()
+
+    @Slot(str, object)
+    def _handle_current_tipper_changed(self, date: str, tipper_obj: object) -> None:
+        if not isinstance(tipper_obj, TipperInfo):
+            return
+        row = self.tipper_model.set_current_tipper(date, tipper_obj)
+        if row >= 0:
+            self._scroll_to_row(row)
+        self._update_preview_stats()
+
+    @Slot(str, object, str)
+    def _handle_tipper_status_changed(self, date: str, tipper_obj: object, status: str) -> None:
+        if not isinstance(tipper_obj, TipperInfo):
+            return
+        row = self.tipper_model.set_tipper_status(date, tipper_obj, status)
+        if status == "Current" and row >= 0:
+            self._scroll_to_row(row)
+        self._update_preview_stats()
 
     @Slot(int)
     def _update_progress(self, value: int) -> None:
@@ -533,6 +707,7 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_finished(self, summary: ProcessSummary) -> None:
         report_dir = self._current_report_dir
+        self._close_active_hitl_dialogs()
         self._cleanup_worker_thread()
         self._set_ui_running_state(False)
 
@@ -549,6 +724,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_error(self, details: str) -> None:
+        self._close_active_hitl_dialogs()
         self._cleanup_worker_thread()
         self._set_ui_running_state(False)
         self._cancel_requested = True

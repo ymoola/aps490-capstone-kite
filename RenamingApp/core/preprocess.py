@@ -19,6 +19,11 @@ def _normalize_angle_decision(decision: Optional[str], fallback: str, log: LogFn
     return fallback
 
 
+def _emit_tipper_status(callbacks: HitlCallbacks, date: str, tipper: TipperInfo, status: str) -> None:
+    if callbacks.on_tipper_status_changed:
+        callbacks.on_tipper_status_changed(date, tipper, status)
+
+
 def preprocess_tippers(
     tippers: List[TipperInfo],
     callbacks: HitlCallbacks,
@@ -34,6 +39,8 @@ def preprocess_tippers(
     for tipper in tippers:
         if stop_requested():
             raise ProcessingCancelled("Cancelled while preprocessing tippers.")
+        if callbacks.on_current_tipper_changed:
+            callbacks.on_current_tipper_changed(date, tipper)
         if tipper.result == "U" and tipper.angle is not None and abs(tipper.angle) < 1e-9:
             try:
                 decision = callbacks.decide_angle_zero(tipper)
@@ -46,6 +53,7 @@ def preprocess_tippers(
             normalized_decision = _normalize_angle_decision(decision, tipper.result, log)
             if normalized_decision is None:
                 log(f"  - Deleting/Skipping tipper {tipper.path.name}")
+                _emit_tipper_status(callbacks, date, tipper, "Skipped")
                 continue
             if normalized_decision != tipper.result:
                 tipper = update_tipper_result(
@@ -57,6 +65,7 @@ def preprocess_tippers(
                     date=date,
                     sub=sub,
                 )
+                _emit_tipper_status(callbacks, date, tipper, "Corrected")
         processed.append(tipper)
     processed.sort(key=lambda t: (t.time_tuple, t.path.name))
     return processed

@@ -151,6 +151,52 @@ def collect_tippers_for_sub(tipper_date_dir: Path, participant: str, log: LogFn)
     return tippers
 
 
+def collect_tippers_for_date(tipper_date_dir: Path, log: LogFn) -> List[TipperInfo]:
+    tippers: List[TipperInfo] = []
+    for path in sorted(tipper_date_dir.glob("*.mat")):
+        if not path.is_file():
+            continue
+        parsed = _parse_tipper_for_preview(path, log)
+        if parsed:
+            tippers.append(parsed)
+    tippers.sort(key=lambda t: (t.time_tuple, t.path.name))
+    return tippers
+
+
+def _parse_tipper_for_preview(path: Path, log: LogFn) -> Optional[TipperInfo]:
+    """
+    Lightweight parser for date-level preview.
+    It intentionally avoids mutating files (no angle extraction/renaming).
+    """
+    stem = path.stem
+    parts = stem.split("_")
+    if len(parts) < 5:
+        log(f"[WARN] Skipping malformed tipper filename in preview: {path.name}")
+        return None
+    participant = parts[1].strip()
+    if not participant:
+        return None
+
+    dir_result = parts[2].strip().upper()
+    if len(dir_result) < 1:
+        return None
+    direction = dir_result[0]
+    result = dir_result[1].upper() if len(dir_result) >= 2 else "U"
+    if direction not in _VALID_DIRECTIONS or result not in _VALID_RESULTS:
+        return None
+
+    angle = parse_float(parts[3]) if len(parts) >= 4 else None
+    time_tuple = parse_time_token(parts[-1])
+    return TipperInfo(
+        path=path,
+        direction=direction,
+        result=result,
+        time_tuple=time_tuple,
+        participant=participant,
+        angle=angle,
+    )
+
+
 def update_tipper_result(
     tipper: TipperInfo,
     new_result: str,

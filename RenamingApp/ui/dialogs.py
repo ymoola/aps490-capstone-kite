@@ -34,7 +34,8 @@ class DirectionDialog(QDialog):
     def __init__(self, video_path: Path, message: str, parent=None):
         super().__init__(parent)
         self._result: Optional[str] = None
-        self.setWindowModality(Qt.WindowModal)
+        self.setWindowModality(Qt.NonModal)
+        self.setModal(False)
         self.setWindowTitle("Direction Needed")
         self.setMinimumWidth(640)
         layout = QVBoxLayout()
@@ -134,7 +135,8 @@ class AngleDecisionDialog(QDialog):
     def __init__(self, tipper: TipperInfo, parent=None):
         super().__init__(parent)
         self._result: Optional[str] = tipper.result
-        self.setWindowModality(Qt.WindowModal)
+        self.setWindowModality(Qt.NonModal)
+        self.setModal(False)
         self.setWindowTitle("Tipper Angle Review")
         layout = QVBoxLayout()
         layout.addWidget(QLabel(f"Tipper: {tipper.path.name}"))
@@ -183,7 +185,8 @@ class ConflictDialog(QDialog):
     ):
         super().__init__(parent)
         self._resolution = ConflictResolution(action="abort")
-        self.setWindowModality(Qt.WindowModal)
+        self.setWindowModality(Qt.NonModal)
+        self.setModal(False)
         self.setWindowTitle("Direction Conflict")
         self.setMinimumWidth(760)
         layout = QVBoxLayout()
