@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QDialog,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -24,7 +23,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
-    QSpinBox,
     QTableView,
     QTabWidget,
     QVBoxLayout,
@@ -44,6 +42,10 @@ from RenamingApp.core.reporting import ReportCollector
 from RenamingApp.ui.dialogs import AngleDecisionDialog, ConflictDialog, DirectionDialog
 from RenamingApp.ui.progress import LogPanel
 from RenamingApp.ui.tipper_table import TipperTableModel
+
+DEFAULT_SAMPLE_STEP = 3
+DEFAULT_NO_MOTION_THRESHOLD = 0.12
+DEFAULT_DRY_RUN = False
 
 
 class ProcessingWorker(QObject):
@@ -186,7 +188,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
 
         layout.addWidget(self._build_paths_group())
-        layout.addWidget(self._build_params_group())
+        layout.addWidget(self._build_run_options_group())
         layout.addWidget(self._build_log_group())
 
         buttons_layout = QHBoxLayout()
@@ -297,34 +299,15 @@ class MainWindow(QMainWindow):
         self._sync_log_destination_preview()
         return group
 
-    def _build_params_group(self) -> QWidget:
-        group = QGroupBox("Parameters")
-        form = QFormLayout()
+    def _build_run_options_group(self) -> QWidget:
+        group = QGroupBox("Options")
+        layout = QVBoxLayout()
+        self.dry_run_checkbox = QCheckBox("Dry run (preview changes only, no file copy/rename)")
+        self.dry_run_checkbox.setChecked(DEFAULT_DRY_RUN)
+        layout.addWidget(self.dry_run_checkbox)
+        group.setLayout(layout)
 
-        self.sample_step_spin = QSpinBox()
-        self.sample_step_spin.setMinimum(1)
-        self.sample_step_spin.setMaximum(100)
-        self.sample_step_spin.setValue(3)
-        form.addRow("Sample step:", self.sample_step_spin)
-
-        self.threshold_spin = QDoubleSpinBox()
-        self.threshold_spin.setDecimals(3)
-        self.threshold_spin.setMinimum(0.0)
-        self.threshold_spin.setMaximum(1.0)
-        self.threshold_spin.setSingleStep(0.01)
-        self.threshold_spin.setValue(0.12)
-        form.addRow("No-motion threshold:", self.threshold_spin)
-
-        self.dry_run_checkbox = QCheckBox("Dry run (no copy)")
-        form.addRow(self.dry_run_checkbox)
-
-        group.setLayout(form)
-
-        self._param_inputs = [
-            self.sample_step_spin,
-            self.threshold_spin,
-            self.dry_run_checkbox,
-        ]
+        self._path_inputs.append(self.dry_run_checkbox)
         return group
 
     def _build_log_group(self) -> QWidget:
@@ -337,7 +320,7 @@ class MainWindow(QMainWindow):
 
     def _set_ui_running_state(self, running: bool) -> None:
         self._is_running = running
-        for widget in self._path_inputs + self._param_inputs:
+        for widget in self._path_inputs:
             widget.setEnabled(not running)
         self.run_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
@@ -443,8 +426,8 @@ class MainWindow(QMainWindow):
             videos_dir=videos_dir,
             tippers_dir=tippers_dir,
             dest_dir=output_dir,
-            sample_step=self.sample_step_spin.value(),
-            no_motion_threshold=self.threshold_spin.value(),
+            sample_step=DEFAULT_SAMPLE_STEP,
+            no_motion_threshold=DEFAULT_NO_MOTION_THRESHOLD,
             dry_run=self.dry_run_checkbox.isChecked(),
         )
         return config, report_dir, log_file
