@@ -32,7 +32,7 @@ class SmoothingConfig:
     alpha: float = 0.7
     conf_thr: float = 0.05
     smooth_conf: bool = False
-    missing_policy: MissingPolicy = "hold"
+    missing_policy: MissingPolicy = "zero"
     clip_to_frame: Optional[Tuple[int, int]] = None  # (width,height) clip x/y after smoothing
 
 

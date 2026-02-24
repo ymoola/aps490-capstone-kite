@@ -10,6 +10,18 @@ CV/data/
 CV/out/
 CV/models/
 
+CV/out_openpose
+CV/mmaction2
+CV/openpose/
+CV/splits/
+CV/CTR-GCN/
+CV/frameworks
+CV/outputs/
+CV/data/
+CV/outputs/
+CV/runs/
+
+
 # Distribution / packaging
 .Python
 build/

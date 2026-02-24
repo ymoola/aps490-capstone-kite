@@ -4,8 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import yolo as yolo_backend
-import mp_pose_landmarker as mp_backend
+import pose_estimators.yolo as yolo_backend
+import pose_estimators.mp_pose_landmarker as mp_backend
+import pose_estimators.openpose_backend as op_backend
 
 
 @dataclass
@@ -16,7 +17,7 @@ class PoseBackendConfig:
     name: str  # "yolo" or "mediapipe"
 
     # -------- YOLO backend options --------
-    yolo_model_path: str = "CV/yolo11x-pose.pt"
+    yolo_model_path: str = "CV/models/yolo26x-pose.pt"
     yolo_num_kpts: int = 17
     yolo_device: int | str | None = None
     yolo_batch_size: int = 8
@@ -29,6 +30,11 @@ class PoseBackendConfig:
     mp_min_det_conf: float = 0.5
     mp_min_presence_conf: float = 0.5
     mp_min_track_conf: float = 0.5
+
+    op_exe_path: str = r"CV\openpose\bin\OpenPoseDemo.exe"
+    op_model_folder: str = r"CV\openpose\models"
+    op_model_pose: str = "BODY_25"
+    op_number_people_max: int = 1
 
 
 class PoseExtractor:
@@ -50,10 +56,19 @@ class PoseExtractor:
                 min_pose_presence_confidence=cfg.mp_min_presence_conf,
                 min_tracking_confidence=cfg.mp_min_track_conf,
             )
+        elif self.backend_name == "openpose":
+            self.model = op_backend.OpenPoseConfig(
+                openpose_exe=self.cfg.op_exe_path,
+                model_folder=self.cfg.op_model_folder,
+                model_pose=self.cfg.op_model_pose,
+                number_people_max=self.cfg.op_number_people_max,
+                display=0,
+                render_pose=0,
+            )
         else:
             raise ValueError(f"Unknown backend: {cfg.name!r}")
 
-    def extract_pose_from_video(self, video_path: str):
+    def extract_pose_from_video(self, video_path: str, *, conf_thr: float = 0.0):
         if self.backend_name == "yolo":
             return yolo_backend.extract_pose_from_video(
                 video_path,
@@ -73,7 +88,8 @@ class PoseExtractor:
             )
             self._mp_next_ts_ms = next_ts            # <<< NEW
             return poses, meta
-
+        if self.backend_name == "openpose":
+            return op_backend.extract_pose_from_video(video_path, self.model, conf_thr=conf_thr)
         raise RuntimeError("Unreachable")
 
 

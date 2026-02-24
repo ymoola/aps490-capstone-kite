@@ -1,21 +1,21 @@
-# visualize_pose.py
+# visualize.py
 from __future__ import annotations
 
 import json
 import subprocess
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 import numpy as np
 import cv2
 
 
 # =============================
-# CONFIG
+# CONFIG (edit these)
 # =============================
-NPZ_PATH = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\out\2025-02-06\sub354\idapt7800_sub354_DP_5_11-26-23.npz"
+NPZ_PATH = r"D:\temp\idapt797_sub349_DP_13_12-13-01_openpose_raw.npz"
 
-FPS = 120.0
+FPS = 30
 CONF_THR = 0.05
 PERSON_INDEX = 0
 
@@ -23,16 +23,17 @@ CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
 WINDOW_NAME = "Pose Viewer"
 
+DRAW_ON_BLACK = True
+LABEL_KPT_INDICES = False  # useful when debugging the “one point goes flying” issue
+
 SAVE_DIR = Path(r"D:\Downloads")
-SAVE_SUFFIX = "_pose_wa.mp4"   # final output only
-TMP_SUFFIX = "_tmp.mp4"        # intermediate (deleted)
+SAVE_SUFFIX = "_pose_wa.mp4"
+TMP_SUFFIX = "_tmp.mp4"
 
 
 # -----------------------------
-# Skeleton edges
+# Skeleton edge sets
 # -----------------------------
-
-# COCO / YOLO 17-keypoint skeleton (Ultralytics pose default)
 COCO17_EDGES: List[tuple[int, int]] = [
     (5, 6),
     (5, 7), (7, 9),
@@ -45,51 +46,41 @@ COCO17_EDGES: List[tuple[int, int]] = [
     (0, 5), (0, 6),
 ]
 
-# MediaPipe Pose Landmarker (33 landmarks) indices (common map):
-# 0 nose
-# 1-4 eyes/ears
-# 11/12 shoulders, 13/14 elbows, 15/16 wrists
-# 23/24 hips, 25/26 knees, 27/28 ankles
-# 29/30 heels, 31/32 foot index (toes)
+# OpenPose BODY_25 (K=25)
+BODY25_EDGES: List[tuple[int, int]] = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (1, 5), (5, 6), (6, 7),
+    (1, 8), (8, 9), (9, 10), (10, 11),
+    (8, 12), (12, 13), (13, 14),
+    (0, 15), (15, 17),
+    (0, 16), (16, 18),
+    (14, 19), (19, 20), (20, 21),
+    (11, 22), (22, 23), (23, 24),
+]
+
+# MediaPipe Pose Landmarker (K=33)
 MEDIAPIPE33_EDGES: List[tuple[int, int]] = [
-    # torso
-    (11, 12),
-    (11, 23), (12, 24),
-    (23, 24),
-
-    # left arm
-    (11, 13), (13, 15),
-    (15, 17), (15, 19), (15, 21),
-    (17, 19), (19, 21),
-
-    # right arm
-    (12, 14), (14, 16),
-    (16, 18), (16, 20), (16, 22),
-    (18, 20), (20, 22),
-
-    # left leg + foot
-    (23, 25), (25, 27),
-    (27, 29), (29, 31),
-    (27, 31),
-
-    # right leg + foot
-    (24, 26), (26, 28),
-    (28, 30), (30, 32),
-    (28, 32),
-
-    # head-ish
-    (0, 1), (0, 2), (1, 3), (2, 4),
-    (0, 11), (0, 12),
+    (11, 12), (11, 23), (12, 24), (23, 24),
+    (11, 13), (13, 15), (15, 17), (15, 19), (15, 21), (17, 19), (19, 21),
+    (12, 14), (14, 16), (16, 18), (16, 20), (16, 22), (18, 20), (20, 22),
+    (23, 25), (25, 27), (27, 29), (29, 31), (27, 31),
+    (24, 26), (26, 28), (28, 30), (30, 32), (28, 32),
+    (0, 1), (0, 2), (1, 3), (2, 4), (0, 11), (0, 12),
 ]
 
 
-def pick_edges_for_K(K: int) -> List[tuple[int, int]]:
-    if K == 33:
-        return MEDIAPIPE33_EDGES
+def pick_edges(K: int) -> List[tuple[int, int]]:
     if K == 17:
         return COCO17_EDGES
-    # fallback: no bones, only points
+    if K == 25:
+        return BODY25_EDGES
+    if K == 33:
+        return MEDIAPIPE33_EDGES
     return []
+
+
+def guess_format(K: int) -> str:
+    return {17: "coco17/yolo", 25: "openpose_body25", 33: "mediapipe33"}.get(K, f"unknown(K={K})")
 
 
 def reencode_for_whatsapp(src: str, dst: str) -> None:
@@ -129,13 +120,14 @@ def to_TNKC(poses: np.ndarray) -> np.ndarray:
     if arr.ndim == 3:
         return arr[:, None, :, :]  # (T,1,K,C)
     if arr.ndim == 4:
-        return arr  # (T,N,K,C)
+        return arr
     raise ValueError(f"Unsupported pose shape: {arr.shape}")
 
 
 def normalize_if_needed(xy: np.ndarray, W: int, H: int) -> np.ndarray:
     mx = float(np.nanmax(xy[..., 0]))
     my = float(np.nanmax(xy[..., 1]))
+    # If coords look normalized, scale.
     if mx <= 2.0 and my <= 2.0:
         xy = xy.copy()
         xy[..., 0] *= W
@@ -150,8 +142,12 @@ def draw_frame(
     H: int,
     conf_thr: float,
     person_index: int,
+    edges: List[tuple[int, int]],
+    draw_on_black: bool,
+    label_indices: bool,
 ) -> np.ndarray:
-    img = np.zeros((H, W, 3), dtype=np.uint8)
+    bg = 0 if draw_on_black else 255
+    img = np.full((H, W, 3), bg, dtype=np.uint8)
 
     T, N, K, C = poses.shape
     if t < 0 or t >= T:
@@ -159,9 +155,7 @@ def draw_frame(
     if person_index < 0 or person_index >= N:
         raise ValueError(f"PERSON_INDEX={person_index} out of range for N={N}")
 
-    edges = pick_edges_for_K(K)
-
-    pts = poses[t, person_index]  # (K,C)
+    pts = poses[t, person_index]
     xy = normalize_if_needed(pts[:, :2].astype(np.float32), W, H)
     conf = pts[:, 2].astype(np.float32) if C >= 3 else None
 
@@ -171,49 +165,67 @@ def draw_frame(
             continue
         if conf is not None and (conf[a] < conf_thr or conf[b] < conf_thr):
             continue
+
         ax, ay = xy[a]
         bx, by = xy[b]
         if not np.isfinite([ax, ay, bx, by]).all():
             continue
+
         cv2.line(img, (int(ax), int(ay)), (int(bx), int(by)), (255, 255, 255), 2, cv2.LINE_AA)
 
-    # joints
+    # joints (+ optional indices)
     for k in range(K):
         if conf is not None and conf[k] < conf_thr:
             continue
         x, y = xy[k]
         if not np.isfinite([x, y]).all():
             continue
+
         cv2.circle(img, (int(x), int(y)), 3, (255, 255, 255), -1, cv2.LINE_AA)
+        if label_indices:
+            cv2.putText(
+                img,
+                str(k),
+                (int(x) + 4, int(y) - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255) if draw_on_black else (0, 0, 0),
+                1,
+                cv2.LINE_AA,
+            )
 
     cv2.putText(
         img,
-        f"{t+1}/{T}  K={K}",
+        f"{t+1}/{T}",
         (20, 50),
         cv2.FONT_HERSHEY_SIMPLEX,
         1.2,
-        (255, 255, 255),
+        (255, 255, 255) if draw_on_black else (0, 0, 0),
         2,
         cv2.LINE_AA,
     )
     return img
 
 
-def render_full_video_to_tmp(poses: np.ndarray, tmp_path: Path) -> None:
+def render_full_video_to_tmp(poses: np.ndarray, tmp_path: Path, edges: List[tuple[int, int]]) -> None:
     T, _, _, _ = poses.shape
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(
-        str(tmp_path),
-        fourcc,
-        FPS,
-        (CANVAS_WIDTH, CANVAS_HEIGHT),
-        isColor=True,
-    )
+    writer = cv2.VideoWriter(str(tmp_path), fourcc, FPS, (CANVAS_WIDTH, CANVAS_HEIGHT), isColor=True)
     if not writer.isOpened():
-        raise RuntimeError("OpenCV VideoWriter failed to open. Try .avi or install codecs.")
+        raise RuntimeError("OpenCV VideoWriter failed to open. Try output .avi or ensure codecs installed.")
 
     for t in range(T):
-        frame = draw_frame(t, poses, CANVAS_WIDTH, CANVAS_HEIGHT, CONF_THR, PERSON_INDEX)
+        frame = draw_frame(
+            t,
+            poses,
+            CANVAS_WIDTH,
+            CANVAS_HEIGHT,
+            CONF_THR,
+            PERSON_INDEX,
+            edges,
+            DRAW_ON_BLACK,
+            LABEL_KPT_INDICES,
+        )
         writer.write(frame)
 
     writer.release()
@@ -256,19 +268,23 @@ def main():
     poses = to_TNKC(poses_raw)
 
     T, N, K, C = poses.shape
-    print(f"[info] poses shape: T={T}, N={N}, K={K}, C={C}")
+    fmt = guess_format(K)
+    edges = pick_edges(K)
+
+    print(f"[info] poses shape: T={T}, N={N}, K={K}, C={C} format={fmt}")
     if meta:
-        print(f"[info] backend: {meta.get('backend', 'unknown')}")
+        backend = meta.get("backend", "unknown")
+        stage = (meta.get("poses_saved_stage") or meta.get("pipeline", {}))
+        print(f"[info] meta backend={backend} stage={stage}")
 
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
-
     final_path = SAVE_DIR / (npz_path.stem + SAVE_SUFFIX)
     tmp_path = SAVE_DIR / (npz_path.stem + TMP_SUFFIX)
 
-    print(f"[info] rendering full sequence to temp: {tmp_path}")
-    render_full_video_to_tmp(poses, tmp_path)
+    print(f"[info] rendering to temp: {tmp_path}")
+    render_full_video_to_tmp(poses, tmp_path, edges)
 
-    print(f"[info] converting to WhatsApp-safe MP4: {final_path}")
+    print(f"[info] re-encoding to WhatsApp-safe: {final_path}")
     reencode_for_whatsapp(str(tmp_path), str(final_path))
 
     try:
@@ -277,7 +293,7 @@ def main():
         pass
 
     print(f"[done] wrote: {final_path}")
-    print("[info] now playing the converted file (this is what you'll upload)")
+    print("[info] now playing the converted file")
     play_video_file(final_path)
 
 
