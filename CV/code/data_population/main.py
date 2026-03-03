@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import json
 from dataclasses import asdict
 from multiprocessing import get_context
@@ -11,16 +12,16 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from pose import iter_videos, PoseExtractor, PoseBackendConfig
-from preprocessing.pose_interpolation import InterpolationConfig, interpolate_pose_sequence
-from preprocessing.pose_smoothing import SmoothingConfig, EMAPoseSmoother
+from CV.code.data_population.pose import iter_videos, PoseExtractor, PoseBackendConfig
+from CV.code.preprocessing.pose_interpolation import InterpolationConfig, interpolate_pose_sequence
+from CV.code.preprocessing.pose_smoothing import SmoothingConfig, EMAPoseSmoother
 
 POSE_BACKEND = "yolo"  # "openpose" | "yolo" | "mediapipe"
 
 # -----------------------------
 # PATHS
 # -----------------------------
-DATA_ROOT = r"C:\Users\brad\OneDrive - UHN\Li, Yue (Sophia)'s files - WinterLab videos\raw videos to rename the gopro files\videos_renamed"
+DATA_ROOT = r"D:\Brad\OneDrive - UHN\Li, Yue (Sophia)'s files - WinterLab videos\raw videos to rename the gopro files\videos_renamed"
 POSE_OUT_ROOT = rf"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\outputs\out_{POSE_BACKEND.lower()}"
 
 # -----------------------------
@@ -34,7 +35,7 @@ OPENPOSE_MODEL_POSE = "BODY_25"
 OPENPOSE_NUMBER_PEOPLE_MAX = 1
 
 # YOLO (if you ever swap back)
-YOLO_MODEL_PATH = r"CV\models\yolo11x-pose.pt"
+YOLO_MODEL_PATH = r"CV\models\yolo26x-pose.pt"
 YOLO_DEVICE = None             # e.g., "cuda:0"
 YOLO_BATCH_SIZE = 8
 YOLO_VERBOSE = False
@@ -153,7 +154,7 @@ def worker(
         scale_factor=FPS_SCALE,
         mode=INTERP_MODE,
         conf_thr=CONF_THR,
-        frame_min_kpts=10,      # try 6, 8, 10
+        frame_min_kpts=8,      # try 6, 8, 10
         frame_min_frac=0.0,
         clip_to_frame=None,
     )

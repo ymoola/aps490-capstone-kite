@@ -184,6 +184,7 @@ class TrainConfig:
 
     lr: float = 1e-3
     weight_decay: float = 1e-4
+    patience: int = 30
 
     # imbalance handling
     use_weighted_sampler: bool = True
@@ -193,6 +194,7 @@ class TrainConfig:
     out_dir: str = "runs/ctr_gcn"
     save_best: bool = True
     best_metric: str = "val_balanced_acc"  # or "val_acc"
+    
 
 
 # -----------------------------
@@ -418,7 +420,7 @@ def train_validate_test(
 
     history: List[dict] = []
     t0 = time.time()
-
+    epochs_no_improve = 0
     for epoch in range(1, cfg.epochs + 1):
         tr = run_one_epoch_train(model, train_loader, optimizer, criterion, device)
         va = run_one_epoch_eval(model, val_loader, criterion, device)
@@ -456,6 +458,8 @@ def train_validate_test(
         score = row.get(cfg.best_metric, row["val_balanced_acc"])
         if cfg.save_best and score > best_score:
             best_score = score
+            epochs_no_improve = 0
+
             torch.save(
                 {
                     "model_state": model.state_dict(),
@@ -466,12 +470,20 @@ def train_validate_test(
                 },
                 best_path,
             )
-
+        else:
+            epochs_no_improve += 1
+            
         print(
             f"[ctr_gcn] epoch {epoch:03d}/{cfg.epochs} | "
             f"train loss {tr['loss']:.4f} acc {tr['acc']:.3f} bal {tr['balanced_acc']:.3f} | "
             f"val loss {va['loss']:.4f} acc {va['acc']:.3f} bal {va['balanced_acc']:.3f}"
         )
+
+        if epochs_no_improve >= cfg.patience:
+            print(f"Early stopping at epoch {epoch}")
+            break
+
+
 
     # load best and test
     if cfg.save_best and os.path.isfile(best_path):

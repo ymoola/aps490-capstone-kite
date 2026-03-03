@@ -30,8 +30,14 @@ def abspath(p: str) -> str:
     return os.path.abspath(os.path.expanduser(p))
 
 
+import re as _re
+_SUB_DIR_RE = _re.compile(r'^sub\d+$', _re.IGNORECASE)
+
+
 def iter_videos(root: str):
     for r, _, files in os.walk(root):
+        if not _SUB_DIR_RE.match(os.path.basename(r)):
+            continue
         for f in files:
             if os.path.splitext(f)[1] in VIDEO_EXTS:
                 yield os.path.join(r, f)

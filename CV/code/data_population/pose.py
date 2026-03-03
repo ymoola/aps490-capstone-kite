@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import pose_estimators.yolo as yolo_backend
-import pose_estimators.mp_pose_landmarker as mp_backend
-import pose_estimators.openpose_backend as op_backend
+from CV.code.pose_estimators import yolo as yolo_backend
+from CV.code.pose_estimators import mp_pose_landmarker as mp_backend
+from CV.code.pose_estimators import openpose_backend as op_backend
 
 
 @dataclass
