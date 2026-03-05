@@ -6,7 +6,6 @@ __pycache__/
 # C extensions
 *.so
 
-CV/data/
 CV/out/
 CV/models/
 
@@ -17,7 +16,6 @@ CV/splits/
 CV/CTR-GCN/
 CV/frameworks
 CV/outputs/
-CV/data/
 CV/outputs/
 CV/runs/
 
