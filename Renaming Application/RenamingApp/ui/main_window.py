@@ -159,7 +159,7 @@ class ProcessingWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Video Name Fixer")
+        self.setWindowTitle("SlopeSense")
         self.worker: Optional[ProcessingWorker] = None
         self.thread: Optional[QThread] = None
         self._log_file_path: Optional[Path] = None
@@ -244,9 +244,9 @@ class MainWindow(QMainWindow):
         text_layout = QVBoxLayout()
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(3)
-        title = QLabel("Tipper Video Renaming")
+        title = QLabel("SlopeSense")
         title.setObjectName("HeroTitle")
-        subtitle = QLabel("Research Workflow Console")
+        subtitle = QLabel("Video Analysis & Renaming Console")
         subtitle.setObjectName("HeroSubtitle")
         text_layout.addWidget(title)
         text_layout.addWidget(subtitle)
