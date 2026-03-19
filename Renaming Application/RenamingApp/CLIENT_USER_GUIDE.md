@@ -1,7 +1,7 @@
-# Video Name Fixer - Client User Guide
+# SlopeSense - Client User Guide
 
 ## 1. What This App Does
-Video Name Fixer matches GoPro videos to MATLAB tipper files and creates renamed video outputs based on the matched tipper filenames.
+SlopeSense matches GoPro videos to MATLAB tipper files and creates renamed video outputs based on the matched tipper filenames.
 
 The app also supports Human-in-the-Loop (HITL) decisions when:
 - video direction cannot be auto-detected,
@@ -71,7 +71,7 @@ The **Tipper Preview** tab shows current date tipper rows and live status update
 10. Wait for the completion popup.
 11. Review outputs in:
 - Output folder (or simulated actions if dry run),
-- Reports folder (`run.log`, `tipper_corrections.csv`, `failed_folders.csv`, `video_mappings.xlsx`).
+- Reports folder (`run.log`, `tipper_corrections.csv`, `failed_folders.csv`, `video_mappings.xlsx`, `MAA/`).
 
 ## 5. HITL Dialogs 
 ### A) Direction Needed
@@ -150,6 +150,25 @@ Per matched mapping details:
 - `renamed_video`
 - `dry_run`
 
+### 5) `MAA/`
+MAA means Maximum Achievable Angle.
+
+Location:
+- `run_reports/MAA/<date>/<sub>.xlsx`
+
+Structure:
+- one workbook per participant per date,
+- one sheet per shoe.
+
+Each shoe sheet contains:
+- `Uphill MAA`
+- `Downhill MAA`
+- an angle summary table with pass/fail counts,
+- a detailed trial table using `Trial Number`, `Angle`, `Direction`, `Result`, and `Tipper Filename`.
+
+If there is not enough data to determine MAA, the sheet shows:
+- `Insufficient data`
+
 ## 8. Completion and Cancellation
 ### Completion Popup
 At end of run, app shows summary:
@@ -195,4 +214,3 @@ Closing/aborting any HITL dialog aborts the full run by design.
 - Respond to HITL dialogs.
 - Wait for completion popup.
 - Review reports.
-
