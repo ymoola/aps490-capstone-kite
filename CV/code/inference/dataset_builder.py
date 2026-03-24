@@ -7,12 +7,20 @@ import re
 import numpy as np
 from typing import Dict, List, Tuple
 
-from data_splitter import (
-    KFoldConfig,
-    make_kfold_splits,
-    write_kfold_artifacts,
-    normalize_participant_key,
-)
+try:
+    from data_splitter import (
+        KFoldConfig,
+        make_kfold_splits,
+        write_kfold_artifacts,
+        normalize_participant_key,
+    )
+except ModuleNotFoundError:
+    from CV.code.inference.data_splitter import (
+        KFoldConfig,
+        make_kfold_splits,
+        write_kfold_artifacts,
+        normalize_participant_key,
+    )
 
 # -----------------------------
 # CONFIG (EDIT THESE)

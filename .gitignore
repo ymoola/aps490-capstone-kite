@@ -19,6 +19,9 @@ CV/outputs/
 CV/outputs/
 CV/runs/
 
+# Production model output (tracked intentionally)
+!CV/production/
+
 
 # Distribution / packaging
 .Python

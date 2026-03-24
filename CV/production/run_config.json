@@ -1,0 +1,72 @@
+{
+  "best_hparams": {
+    "batch_size": 32,
+    "lr": 0.01,
+    "weight_decay": 1e-05,
+    "num_folds": 5,
+    "val_metric_key": "val_balanced_acc",
+    "val_mean": 0.9047245339684803,
+    "val_std": 0.009770972877623964,
+    "test_mean": null,
+    "test_std": null,
+    "missing_val_folds": 0,
+    "missing_test_folds": 5
+  },
+  "model_kwargs": {
+    "num_class": 2,
+    "num_point": 17,
+    "num_person": 1,
+    "in_channels": 3,
+    "graph": "graph.coco17.Graph",
+    "graph_args": {},
+    "drop_out": 0.4
+  },
+  "train_config": {
+    "device": "cuda",
+    "epochs": 250,
+    "batch_size": 32,
+    "num_workers": 4,
+    "lr": 0.01,
+    "weight_decay": 1e-05,
+    "patience": 40,
+    "use_weighted_sampler": true,
+    "use_class_weighted_loss": true,
+    "out_dir": "D:\\Brad\\School\\UofT\\Year4\\CSC494_eng\\aps490-capstone-kite\\CV\\production\\run",
+    "save_best": true,
+    "best_metric": "val_balanced_acc"
+  },
+  "split_info": {
+    "seed": 42,
+    "val_ratio": 0.2,
+    "train_participants": [
+      "sub344",
+      "sub346",
+      "sub349",
+      "sub352",
+      "sub353",
+      "sub354",
+      "sub356",
+      "sub357",
+      "sub364",
+      "sub367",
+      "sub368",
+      "sub373"
+    ],
+    "val_participants": [
+      "sub295",
+      "sub343",
+      "sub360"
+    ],
+    "train_samples": 1328,
+    "val_samples": 295,
+    "total_participants": 15,
+    "total_samples": 1623
+  },
+  "paths": {
+    "train_npz": "D:\\Brad\\School\\UofT\\Year4\\CSC494_eng\\aps490-capstone-kite\\CV\\production\\dataset\\train.npz",
+    "val_npz": "D:\\Brad\\School\\UofT\\Year4\\CSC494_eng\\aps490-capstone-kite\\CV\\production\\dataset\\val.npz",
+    "ctr_gcn_repo": "D:\\Brad\\School\\UofT\\Year4\\CSC494_eng\\aps490-capstone-kite\\CV\\frameworks\\CTR-GCN",
+    "production_out": "D:\\Brad\\School\\UofT\\Year4\\CSC494_eng\\aps490-capstone-kite\\CV\\production"
+  },
+  "time_started": "2026-03-22 15:46:07"
+}
