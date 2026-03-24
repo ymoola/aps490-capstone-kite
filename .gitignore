@@ -6,6 +6,22 @@ __pycache__/
 # C extensions
 *.so
 
+CTR-GCN/out/
+CTR-GCN/models/
+
+CTR-GCN/out_openpose
+CTR-GCN/mmaction2
+CTR-GCN/openpose/
+CTR-GCN/splits/
+CTR-GCN/frameworks
+CTR-GCN/outputs/
+CTR-GCN/outputs/
+CTR-GCN/runs/
+
+# Production model output (tracked intentionally)
+!CTR-GCN/production/
+
+
 # Distribution / packaging
 .Python
 build/

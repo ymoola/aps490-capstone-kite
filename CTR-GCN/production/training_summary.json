@@ -1,0 +1,58 @@
+{
+  "best_hparams": {
+    "batch_size": 32,
+    "lr": 0.01,
+    "weight_decay": 1e-05,
+    "num_folds": 5,
+    "val_metric_key": "val_balanced_acc",
+    "val_mean": 0.9047245339684803,
+    "val_std": 0.009770972877623964,
+    "test_mean": null,
+    "test_std": null,
+    "missing_val_folds": 0,
+    "missing_test_folds": 5
+  },
+  "split_info": {
+    "seed": 42,
+    "val_ratio": 0.2,
+    "train_participants": [
+      "sub344",
+      "sub346",
+      "sub349",
+      "sub352",
+      "sub353",
+      "sub354",
+      "sub356",
+      "sub357",
+      "sub364",
+      "sub367",
+      "sub368",
+      "sub373"
+    ],
+    "val_participants": [
+      "sub295",
+      "sub343",
+      "sub360"
+    ],
+    "train_samples": 1328,
+    "val_samples": 295,
+    "total_participants": 15,
+    "total_samples": 1623
+  },
+  "elapsed_sec": 5275.68,
+  "elapsed_min": 87.9,
+  "best_model_path": "D:\\Brad\\School\\UofT\\Year4\\CSC494_eng\\aps490-capstone-kite\\CV\\production\\best_model.pt",
+  "time_completed": "2026-03-22 17:14:03",
+  "val_metrics": {
+    "loss": 0.5785419983412455,
+    "acc": 0.9423728813559322,
+    "balanced_acc": 0.9164908579465542,
+    "tp": 68.0,
+    "tn": 210.0,
+    "fp": 6.0,
+    "fn": 11.0,
+    "tpr_fail": 0.8607594936708861,
+    "tnr_pass": 0.9722222222222222
+  },
+  "history_epochs": 125
+}
