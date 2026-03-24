@@ -25,8 +25,8 @@ from pathlib import Path
 import sys
 
 THIS_FILE = Path(__file__).resolve()
-# .../CV/code/data_population/presentation_fixed_noargs.py
-CODE_ROOT = THIS_FILE.parents[1]  # .../CV/code
+_PROJECT_ROOT = THIS_FILE.parents[2]  # .../CTR-GCN
+CODE_ROOT = THIS_FILE.parents[1]      # .../CTR-GCN/code
 
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
@@ -69,19 +69,19 @@ FINAL_MP4 = SAVE_DIR / f"{OUT_BASENAME}.mp4"
 # =============================
 # ---- These should match the config in your main.py ----
 # OpenPose
-OPENPOSE_EXE = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\frameworks\openpose\bin\OpenPoseDemo.exe"
-OPENPOSE_MODEL_FOLDER = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\frameworks\openpose\models"
+OPENPOSE_EXE = str(_PROJECT_ROOT / "frameworks" / "openpose" / "bin" / "OpenPoseDemo.exe")
+OPENPOSE_MODEL_FOLDER = str(_PROJECT_ROOT / "frameworks" / "openpose" / "models")
 OPENPOSE_MODEL_POSE = "BODY_25"
 OPENPOSE_NUMBER_PEOPLE_MAX = 1
 
 # YOLO
-YOLO_MODEL_PATH = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\models\yolo26x-pose.pt"
+YOLO_MODEL_PATH = str(_PROJECT_ROOT / "models" / "yolo26x-pose.pt")
 YOLO_DEVICE = "cuda:0"           # change if you want
 YOLO_BATCH_SIZE = 8
 YOLO_VERBOSE = False
 
 # MediaPipe
-MP_MODEL_PATH = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\models\pose_landmarker_heavy.task"
+MP_MODEL_PATH = str(_PROJECT_ROOT / "models" / "pose_landmarker_heavy.task")
 MP_MIN_DET = 0.5
 MP_MIN_PRES = 0.5
 MP_MIN_TRACK = 0.5

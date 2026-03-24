@@ -22,15 +22,15 @@ import numpy as np
 import torch
 
 # ============================================================
-# PATHS (edit as needed)
+# PATHS (relative to project root)
 # ============================================================
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-CV_ROOT = os.path.join(PROJECT_ROOT, "CV")
+from pathlib import Path
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-HPO_SUMMARY_PATH = os.path.join(CV_ROOT, "runs", "ctr_gcn_kfold_hpo", "summary_by_hparams.json")
-POSE_NPZ_ROOT = os.path.join(CV_ROOT, "outputs", "out_yolo")
-CTR_GCN_REPO = os.path.join(CV_ROOT, "frameworks", "CTR-GCN")
-PRODUCTION_OUT_DIR = os.path.join(CV_ROOT, "production")
+HPO_SUMMARY_PATH = str(_PROJECT_ROOT / "runs" / "ctr_gcn_kfold_hpo" / "summary_by_hparams.json")
+POSE_NPZ_ROOT = str(_PROJECT_ROOT / "outputs" / "out_yolo")
+CTR_GCN_REPO = str(_PROJECT_ROOT / "frameworks" / "CTR-GCN")
+PRODUCTION_OUT_DIR = str(_PROJECT_ROOT / "production")
 
 # Model/data shape (must match HPO training)
 NUM_CLASS = 2
@@ -59,9 +59,13 @@ VAL_RATIO = 0.2  # 80/20
 
 # ============================================================
 
-from CV.code.inference.ctr_gcn import TrainConfig, train_validate_test  
-from CV.code.inference.data_splitter import build_index, normalize_participant_key 
-from CV.code.inference.dataset_builder import process_pose_npz 
+import sys
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from code.inference.ctr_gcn import TrainConfig, train_validate_test
+from code.inference.data_splitter import build_index, normalize_participant_key
+from code.inference.dataset_builder import process_pose_npz 
 
 def load_best_hparams(summary_path: str) -> Dict[str, Any]:
     """Load best hyperparameters from HPO summary."""

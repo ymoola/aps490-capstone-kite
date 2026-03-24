@@ -4,8 +4,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
+from pathlib import Path
+
 import numpy as np
 from typing import Dict, List, Tuple
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 try:
     from data_splitter import (
@@ -15,7 +22,7 @@ try:
         normalize_participant_key,
     )
 except ModuleNotFoundError:
-    from CV.code.inference.data_splitter import (
+    from code.inference.data_splitter import (
         KFoldConfig,
         make_kfold_splits,
         write_kfold_artifacts,
@@ -23,12 +30,12 @@ except ModuleNotFoundError:
     )
 
 # -----------------------------
-# CONFIG (EDIT THESE)
+# CONFIG (relative to project root)
 # -----------------------------
-OUT_ROOT = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\outputs\out_yolo"
+OUT_ROOT = str(_PROJECT_ROOT / "outputs" / "out_yolo")
 
-CV_SPLIT_OUT_DIR = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\data\cv_splits"
-DATASET_OUT_DIR = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\data\dataset_ctr_gcn"
+CV_SPLIT_OUT_DIR = str(_PROJECT_ROOT / "data" / "cv_splits")
+DATASET_OUT_DIR = str(_PROJECT_ROOT / "data" / "dataset_ctr_gcn")
 
 SEED = 12345
 K_FOLDS = 5

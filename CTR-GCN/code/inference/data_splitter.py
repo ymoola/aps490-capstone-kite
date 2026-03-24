@@ -345,8 +345,10 @@ def write_kfold_artifacts(
 # Optional self-test hook
 # -----------------------------
 if __name__ == "__main__":
-    OUT_ROOT = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\outputs\out_yolo"
-    SPLIT_OUT_DIR = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\data\cv_splits"
+    from pathlib import Path
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    OUT_ROOT = str(_PROJECT_ROOT / "outputs" / "out_yolo")
+    SPLIT_OUT_DIR = str(_PROJECT_ROOT / "data" / "cv_splits")
 
     CFG = KFoldConfig(seed=12345, k=5, val_strategy="next_fold")
 

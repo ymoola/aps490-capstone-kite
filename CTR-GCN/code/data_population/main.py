@@ -6,42 +6,47 @@ import sys
 import json
 from dataclasses import asdict
 from multiprocessing import get_context
+from pathlib import Path
 from typing import List
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
-from CV.code.data_population.pose import iter_videos, PoseExtractor, PoseBackendConfig
-from CV.code.preprocessing.pose_interpolation import InterpolationConfig, interpolate_pose_sequence
-from CV.code.preprocessing.pose_smoothing import SmoothingConfig, EMAPoseSmoother
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from code.data_population.pose import iter_videos, PoseExtractor, PoseBackendConfig
+from code.preprocessing.pose_interpolation import InterpolationConfig, interpolate_pose_sequence
+from code.preprocessing.pose_smoothing import SmoothingConfig, EMAPoseSmoother
 
 POSE_BACKEND = "yolo"  # "openpose" | "yolo" | "mediapipe"
 
 # -----------------------------
-# PATHS
+# PATHS (relative to project root)
 # -----------------------------
 DATA_ROOT = r"D:\Brad\OneDrive - UHN\Li, Yue (Sophia)'s files - WinterLab videos\raw videos to rename the gopro files\videos_renamed"
-POSE_OUT_ROOT = rf"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\outputs\out_{POSE_BACKEND.lower()}"
+POSE_OUT_ROOT = str(_PROJECT_ROOT / "outputs" / f"out_{POSE_BACKEND.lower()}")
 
 # -----------------------------
 # BACKEND CONFIG
 # -----------------------------
 
 # OpenPose
-OPENPOSE_EXE = r"CV\OpenPose\bin\OpenPoseDemo.exe"
-OPENPOSE_MODEL_FOLDER = r"CV\OpenPose\models"
+OPENPOSE_EXE = str(_PROJECT_ROOT / "OpenPose" / "bin" / "OpenPoseDemo.exe")
+OPENPOSE_MODEL_FOLDER = str(_PROJECT_ROOT / "OpenPose" / "models")
 OPENPOSE_MODEL_POSE = "BODY_25"
 OPENPOSE_NUMBER_PEOPLE_MAX = 1
 
 # YOLO (if you ever swap back)
-YOLO_MODEL_PATH = r"CV\models\yolo26x-pose.pt"
+YOLO_MODEL_PATH = str(_PROJECT_ROOT / "models" / "yolo26x-pose.pt")
 YOLO_DEVICE = None             # e.g., "cuda:0"
 YOLO_BATCH_SIZE = 8
 YOLO_VERBOSE = False
 
 # MediaPipe (if you ever swap back)
-MP_MODEL_PATH = r"CV\models\pose_landmarker_heavy.task"
+MP_MODEL_PATH = str(_PROJECT_ROOT / "models" / "pose_landmarker_heavy.task")
 MP_MIN_DET = 0.5
 MP_MIN_PRES = 0.5
 MP_MIN_TRACK = 0.5

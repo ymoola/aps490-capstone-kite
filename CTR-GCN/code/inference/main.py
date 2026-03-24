@@ -4,24 +4,30 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import sys
 import time
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from ctr_gcn import TrainConfig, train_validate_test
 
 
 # ============================================================
-# EDIT THESE VARIABLES
+# PATHS (relative to project root)
 # ============================================================
 
-DATASET_DIR = r"D:\Brad\School\UofT\Year4\CSC494_eng\aps490-capstone-kite\CV\data\dataset_ctr_gcn"
-CTR_GCN_REPO = r"CV\frameworks\CTR-GCN"
+DATASET_DIR = str(_PROJECT_ROOT / "data" / "dataset_ctr_gcn")
+CTR_GCN_REPO = str(_PROJECT_ROOT / "frameworks" / "CTR-GCN")
 
 # Root folder where ALL runs go (each run gets its own subdir)
-RUNS_ROOT = r"CV\runs\ctr_gcn_kfold_hpo"
+RUNS_ROOT = str(_PROJECT_ROOT / "runs" / "ctr_gcn_kfold_hpo")
 
 # 5-fold by default
 K_FOLDS = 5

@@ -319,7 +319,9 @@ if __name__ == "__main__":
     # EDIT THESE VARIABLES
     # -------------------------------------------------
     VIDEO_PATH = r"D:\path\to\your_video.mp4"
-    MODEL_PATH = r"CV\models\yolo11x-pose.pt"
+    from pathlib import Path
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    MODEL_PATH = str(_PROJECT_ROOT / "models" / "yolo11x-pose.pt")
 
     DEVICE = None       # None | "cpu" | "cuda:0" | 0
     IMGSZ = 640

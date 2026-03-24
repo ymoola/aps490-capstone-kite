@@ -15,11 +15,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+_PROJECT_ROOT = Path(__file__).resolve().parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 try:
     from .code.inference.ctr_gcn import PoseNPZDataset, build_ctr_gcn_model
 except ImportError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from CV.code.inference.ctr_gcn import PoseNPZDataset, build_ctr_gcn_model
+    from code.inference.ctr_gcn import PoseNPZDataset, build_ctr_gcn_model
 
 
 PASS_FAIL_MAP = {0: "pass", 1: "fail"}
@@ -193,7 +196,7 @@ def evaluate_run_per_sample(run_row: pd.Series, device: str | None = None) -> pd
     torch_device = torch.device(chosen_device)
 
     model = build_ctr_gcn_model(
-        ctr_repo_root=Path("CV/frameworks/CTR-GCN"),
+        ctr_repo_root=_PROJECT_ROOT / "frameworks" / "CTR-GCN",
         **model_kwargs,
     ).to(torch_device)
     checkpoint = torch.load(ckpt_path, map_location=torch_device)
@@ -274,8 +277,8 @@ def evaluate_run_per_sample(run_row: pd.Series, device: str | None = None) -> pd
 
 
 def build_master_performance_table(
-    runs_root: str | Path = "CV/runs/ctr_gcn_kfold_hpo",
-    cv_splits_dir: str | Path = "CV/data/cv_splits",
+    runs_root: str | Path = str(_PROJECT_ROOT / "runs" / "ctr_gcn_kfold_hpo"),
+    cv_splits_dir: str | Path = str(_PROJECT_ROOT / "data" / "cv_splits"),
     device: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     runs_df = load_run_summary_table(runs_root)
@@ -691,9 +694,9 @@ def _add_chart_to_sheet(
 
 
 def run_full_analysis(
-    runs_root: str | Path = "CV/runs/ctr_gcn_kfold_hpo",
-    cv_splits_dir: str | Path = "CV/data/cv_splits",
-    analysis_dir: str | Path = "CV/analysis_outputs",
+    runs_root: str | Path = str(_PROJECT_ROOT / "runs" / "ctr_gcn_kfold_hpo"),
+    cv_splits_dir: str | Path = str(_PROJECT_ROOT / "data" / "cv_splits"),
+    analysis_dir: str | Path = str(_PROJECT_ROOT / "analysis_outputs"),
     device: str | None = None,
 ) -> dict[str, Any]:
     analysis_dir = Path(analysis_dir)

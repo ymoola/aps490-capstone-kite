@@ -251,7 +251,8 @@ if __name__ == "__main__":
     import mp_pose_landmarker as mp
 
     VIDEO = r"C:\Users\brad\OneDrive - UHN\Li, Yue (Sophia)'s files - WinterLab videos\raw videos to rename the gopro files\videos_renamed\2025-02-06\sub354\idapt798_sub354_DF_14_11-16-00.mp4"
-    MODEL = r"CV\models\pose_landmarker_heavy.task"
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    MODEL = str(_PROJECT_ROOT / "models" / "pose_landmarker_heavy.task")
     OUT = r"D:\Downloads\raw_mediapipe_overlay.mp4"
 
     landmarker = mp.load_model(MODEL)

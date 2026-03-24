@@ -227,8 +227,10 @@ if __name__ == "__main__":
     # -------------------------------------------------
     VIDEO_PATH = r"C:\Users\brad\OneDrive - UHN\Li, Yue (Sophia)'s files - WinterLab videos\raw videos to rename the gopro files\videos_renamed\2025-05-13\sub352\idapt802_sub352_DF_13_GP1_12-07-14.mp4"
 
-    OPENPOSE_EXE = r"CV\OpenPose\bin\OpenPoseDemo.exe"
-    MODEL_FOLDER = r"CV\OpenPose\models"
+    from pathlib import Path
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    OPENPOSE_EXE = str(_PROJECT_ROOT / "OpenPose" / "bin" / "OpenPoseDemo.exe")
+    MODEL_FOLDER = str(_PROJECT_ROOT / "OpenPose" / "models")
 
     MODEL_POSE = "BODY_25"     # BODY_25 | COCO
     NUMBER_PEOPLE_MAX = 1

@@ -123,7 +123,7 @@ def _try_import_ctr_gcn_model(ctr_repo_root: str):
         f"Repo root: {ctr_repo_root}\n"
         "Tried:\n  - " + "\n  - ".join(tried) + "\n\n"
         "Fix options:\n"
-        "  1) Open CV/frameworks/CTR-GCN and find the model definition file.\n"
+        "  1) Open frameworks/CTR-GCN and find the model definition file.\n"
         "  2) Tell me the file path + class name, and we’ll set it explicitly.\n"
     )
 

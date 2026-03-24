@@ -1,12 +1,20 @@
 # pose.py
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from CV.code.pose_estimators import yolo as yolo_backend
-from CV.code.pose_estimators import mp_pose_landmarker as mp_backend
-from CV.code.pose_estimators import openpose_backend as op_backend
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from code.pose_estimators import yolo as yolo_backend
+from code.pose_estimators import mp_pose_landmarker as mp_backend
+from code.pose_estimators import openpose_backend as op_backend
+
+_MODELS_DIR = str(_PROJECT_ROOT / "models")
 
 
 @dataclass
@@ -17,7 +25,7 @@ class PoseBackendConfig:
     name: str  # "yolo" or "mediapipe"
 
     # -------- YOLO backend options --------
-    yolo_model_path: str = "CV/models/yolo26x-pose.pt"
+    yolo_model_path: str = str(Path(_MODELS_DIR) / "yolo26x-pose.pt")
     yolo_num_kpts: int = 17
     yolo_device: int | str | None = None
     yolo_batch_size: int = 8
@@ -25,14 +33,14 @@ class PoseBackendConfig:
 
     # -------- MediaPipe Pose Landmarker options --------
     # NOTE: This is a .task model file (Pose Landmarker model)
-    mp_model_path: str = "CV/models/pose_landmarker.task"
+    mp_model_path: str = str(Path(_MODELS_DIR) / "pose_landmarker.task")
     mp_num_poses: int = 1
     mp_min_det_conf: float = 0.5
     mp_min_presence_conf: float = 0.5
     mp_min_track_conf: float = 0.5
 
-    op_exe_path: str = r"CV\openpose\bin\OpenPoseDemo.exe"
-    op_model_folder: str = r"CV\openpose\models"
+    op_exe_path: str = str(Path(_PROJECT_ROOT) / "openpose" / "bin" / "OpenPoseDemo.exe")
+    op_model_folder: str = str(Path(_PROJECT_ROOT) / "openpose" / "models")
     op_model_pose: str = "BODY_25"
     op_number_people_max: int = 1
 
