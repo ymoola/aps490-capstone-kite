@@ -8,6 +8,13 @@ from pathlib import Path
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+# Import torch before Qt to avoid DLL initialization conflicts on Windows
+# (Qt's OpenGL DLLs can interfere with CUDA DLL loading if loaded first).
+try:
+    import torch  # noqa: F401
+except Exception:
+    pass
+
 
 def _clear_qt_env() -> None:
     # Clear all Qt path/platform vars so stale shell exports do not poison startup.
