@@ -159,23 +159,30 @@ def insert_angle_into_filename(path: Path, angle_str: str, log: LogFn) -> Path:
 def collect_tippers_for_sub(tipper_date_dir: Path, participant: str, log: LogFn) -> List[TipperInfo]:
     tippers: List[TipperInfo] = []
     pattern = f"*_{participant}_*.mat"
-    for path in sorted(tipper_date_dir.glob(pattern)):
-        if not path.is_file():
-            continue
-        try:
-            parsed = parse_tipper_file(path, log=log)
-        except Exception as exc:
-            log(f"[WARN] Failed parsing tipper file '{path.name}': {exc}")
-            parsed = None
-        if parsed and parsed.participant == participant:
-            tippers.append(parsed)
+    # Search the date dir itself, then fall back to a participant subfolder
+    search_dirs = [tipper_date_dir]
+    sub_dir = tipper_date_dir / participant
+    if sub_dir.is_dir():
+        search_dirs.append(sub_dir)
+    for search_dir in search_dirs:
+        for path in sorted(search_dir.glob(pattern)):
+            if not path.is_file():
+                continue
+            try:
+                parsed = parse_tipper_file(path, log=log)
+            except Exception as exc:
+                log(f"[WARN] Failed parsing tipper file '{path.name}': {exc}")
+                parsed = None
+            if parsed and parsed.participant == participant:
+                tippers.append(parsed)
     tippers.sort(key=lambda t: (t.time_tuple, t.path.name))
     return tippers
 
 
 def collect_tippers_for_date(tipper_date_dir: Path, log: LogFn) -> List[TipperInfo]:
     tippers: List[TipperInfo] = []
-    for path in sorted(tipper_date_dir.glob("*.mat")):
+    # Search both the date dir and any immediate subdirectories (participant folders)
+    for path in sorted(tipper_date_dir.glob("**/*.mat")):
         if not path.is_file():
             continue
         parsed = _parse_tipper_for_preview(path, log)

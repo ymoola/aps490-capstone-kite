@@ -39,7 +39,13 @@ from RenamingApp.core.models import (
     RunConfig,
     TipperInfo,
 )
-from RenamingApp.core.reporting import ReportCollector
+from RenamingApp.core.reporting import MappingEntry, ReportCollector
+from RenamingApp.core.validation import (
+    ValidationConfig,
+    ValidationResult,
+    validate_videos,
+    write_validation_report,
+)
 from RenamingApp.ui.dialogs import AngleDecisionDialog, ConflictDialog, DirectionDialog
 from RenamingApp.ui.progress import LogPanel
 from RenamingApp.ui.tipper_table import TipperTableModel
@@ -156,6 +162,57 @@ class ProcessingWorker(QObject):
                 continue
 
 
+class ValidationWorker(QObject):
+    """Background worker that runs CV model validation on renamed videos."""
+
+    log = Signal(str)
+    error = Signal(str)
+    finished = Signal(object)   # List[ValidationResult]
+    progress = Signal(int)
+    progress_range = Signal(int)
+
+    def __init__(
+        self,
+        video_entries: List[tuple],
+        config: "ValidationConfig",
+        report_dir: Path,
+    ):
+        super().__init__()
+        self.video_entries = video_entries
+        self.config = config
+        self.report_dir = report_dir
+        self.cancel_event = Event()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    @Slot()
+    def process(self) -> None:
+        try:
+            self.progress_range.emit(max(1, len(self.video_entries)))
+            results = validate_videos(
+                self.video_entries,
+                self.config,
+                log=self._log,
+                progress=self._progress,
+                stop_requested=self.cancel_event.is_set,
+            )
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = self.report_dir / f"validation_results_{ts}.xlsx"
+            write_validation_report(results, output_path)
+            self._log(f"[Validate] Report written to: {output_path}")
+            self.finished.emit(results)
+        except Exception:
+            self.error.emit(traceback.format_exc())
+
+    def _log(self, msg: str) -> None:
+        self.log.emit(msg)
+
+    def _progress(self, current: int, total: int) -> None:
+        self.progress.emit(current)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -167,6 +224,10 @@ class MainWindow(QMainWindow):
         self._is_running = False
         self._current_report_dir: Optional[Path] = None
         self._active_hitl_dialogs: List[QDialog] = []
+        self._last_mappings: List[MappingEntry] = []
+        self._last_run_config: Optional[RunConfig] = None
+        self._val_worker: Optional[ValidationWorker] = None
+        self._val_thread: Optional[QThread] = None
         self._build_ui()
         self._apply_theme()
 
@@ -187,6 +248,7 @@ class MainWindow(QMainWindow):
 
         self.run_button.clicked.connect(self._start_run)
         self.cancel_button.clicked.connect(self._cancel_run)
+        self.validate_button.clicked.connect(self._start_validation)
 
     def _build_run_tab(self) -> QWidget:
         tab = QWidget()
@@ -196,6 +258,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_brand_header())
         layout.addWidget(self._build_paths_group())
+        layout.addWidget(self._build_validation_settings_group())
         layout.addWidget(self._build_run_options_group())
         layout.addWidget(self._build_log_group())
 
@@ -205,7 +268,16 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setObjectName("SecondaryDanger")
         self.cancel_button.setEnabled(False)
+        self.validate_button = QPushButton("Validate")
+        self.validate_button.setObjectName("PrimaryButton")
+        self.validate_button.setEnabled(True)
+        self.validate_button.setToolTip(
+            "Run CV model classification on videos. "
+            "After a renaming run, classifies renamed videos. "
+            "Otherwise, classifies all videos in the Videos directory."
+        )
         buttons_layout.addWidget(self.run_button)
+        buttons_layout.addWidget(self.validate_button)
         buttons_layout.addWidget(self.cancel_button)
         layout.addLayout(buttons_layout)
 
@@ -560,6 +632,11 @@ class MainWindow(QMainWindow):
         self._sync_log_destination_preview()
         return group
 
+    def _build_validation_settings_group(self) -> QWidget:
+        # Validation model paths are hardcoded -- no UI fields needed.
+        self._validation_inputs: list = []
+        return QWidget()  # empty placeholder
+
     def _build_run_options_group(self) -> QWidget:
         group = QGroupBox("Options")
         group.setObjectName("CardGroup")
@@ -585,12 +662,21 @@ class MainWindow(QMainWindow):
         self._is_running = running
         for widget in self._path_inputs:
             widget.setEnabled(not running)
+        for widget in self._validation_inputs:
+            widget.setEnabled(not running)
         self.run_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
+        self.validate_button.setEnabled(not running)
 
     def _choose_dir(self, line_edit: QLineEdit) -> None:
         base = line_edit.text().strip() or "."
         path = QFileDialog.getExistingDirectory(self, "Select directory", str(Path(base).expanduser()))
+        if path:
+            line_edit.setText(path)
+
+    def _choose_file(self, line_edit: QLineEdit, filter_str: str) -> None:
+        base = line_edit.text().strip() or "."
+        path, _ = QFileDialog.getOpenFileName(self, "Select file", str(Path(base).expanduser()), filter_str)
         if path:
             line_edit.setText(path)
 
@@ -781,6 +867,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self._cancel_requested = False
         self._current_report_dir = report_dir
+        self._last_run_config = config
+        self._last_mappings = []
 
         self.worker = ProcessingWorker(config, report_dir=report_dir)
         self.thread = QThread(self)
@@ -820,6 +908,9 @@ class MainWindow(QMainWindow):
         if self.worker:
             self.worker.cancel()
             self.log_panel.append_line("Cancellation requested...")
+        if self._val_worker:
+            self._val_worker.cancel()
+            self.log_panel.append_line("Validation cancellation requested...")
         self.cancel_button.setEnabled(False)
         self._cancel_requested = True
         self._close_active_hitl_dialogs()
@@ -993,6 +1084,9 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_finished(self, summary: ProcessSummary) -> None:
         report_dir = self._current_report_dir
+        # Save mappings for validation
+        if self.worker and self.worker.reporter:
+            self._last_mappings = list(self.worker.reporter.mappings)
         self._close_active_hitl_dialogs()
         self._cleanup_worker_thread()
         self._set_ui_running_state(False)
@@ -1006,6 +1100,11 @@ class MainWindow(QMainWindow):
             )
         if report_dir:
             msg_lines.append(f"Reports written to: {report_dir}")
+        if self._last_mappings:
+            msg_lines.append(
+                f"\n{len(self._last_mappings)} videos available for validation. "
+                "Click 'Validate' to run CV model classification."
+            )
         self._show_message_box(QMessageBox.Information, "Finished", "\n".join(msg_lines))
 
     @Slot(str)
@@ -1015,6 +1114,136 @@ class MainWindow(QMainWindow):
         self._set_ui_running_state(False)
         self._cancel_requested = True
         self._show_message_box(QMessageBox.Critical, "Error", details)
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+    _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+
+    def _start_validation(self) -> None:
+        if self._is_running:
+            return
+
+        # Hardcoded model paths (relative to repo root)
+        repo_root = Path(__file__).resolve().parent.parent.parent.parent
+        yolo_abs = repo_root / "models" / "yolo26x-pose.pt"
+        ckpt_abs = repo_root / "models" / "classifier"
+
+        if not yolo_abs.is_file():
+            self._show_error(f"YOLO model file not found: {yolo_abs}")
+            return
+        if not ckpt_abs.exists():
+            self._show_error(f"CTR-GCN checkpoint not found: {ckpt_abs}")
+            return
+
+        report_dir = self._current_report_dir
+        if report_dir is None:
+            report_dir = self._resolve_output_dir(self.report_dir_edit.text(), "Reports directory")
+            if report_dir is None:
+                return
+
+        video_entries: List[tuple] = []
+
+        if self._last_mappings and self._last_run_config:
+            # Build from renaming-run mappings (preferred: we know original vs renamed)
+            run_cfg = self._last_run_config
+            for m in self._last_mappings:
+                if not m.dry_run:
+                    video_file = run_cfg.dest_dir / m.date / m.sub / m.renamed_video
+                else:
+                    video_file = run_cfg.videos_dir / m.date / m.sub / m.original_video
+
+                if video_file.exists():
+                    video_entries.append((m.original_video, m.renamed_video, str(video_file)))
+                else:
+                    self.log_panel.append_line(
+                        f"[Validate] Skipping {m.renamed_video}: file not found at {video_file}"
+                    )
+        else:
+            # No renaming run this session -- scan the Videos input directory directly
+            videos_text = self.videos_edit.text().strip()
+            if not videos_text:
+                self._show_error("Set the Videos directory to the folder containing your videos.")
+                return
+            scan_dir = Path(videos_text).expanduser().resolve(strict=False)
+            if not scan_dir.is_dir():
+                self._show_error(f"Videos directory not found: {scan_dir}")
+                return
+            for f in sorted(scan_dir.rglob("*")):
+                if f.suffix.lower() in self._VIDEO_EXTS:
+                    video_entries.append((f.name, f.name, str(f)))
+
+        if not video_entries:
+            self._show_error("No video files found to validate.")
+            return
+
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        config = ValidationConfig(
+            yolo_model_path=str(yolo_abs),
+            ctr_gcn_checkpoint_path=str(ckpt_abs),
+            device=device,
+        )
+
+        self.log_panel.append_line(
+            f"[Validate] Starting validation on {len(video_entries)} videos (device={device})..."
+        )
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self._cancel_requested = False
+
+        self._val_worker = ValidationWorker(video_entries, config, report_dir)
+        self._val_thread = QThread(self)
+        self._val_worker.moveToThread(self._val_thread)
+
+        self._val_thread.started.connect(self._val_worker.process)
+        self._val_worker.finished.connect(self._on_validation_finished)
+        self._val_worker.error.connect(self._on_validation_error)
+        self._val_worker.log.connect(self._append_log)
+        self._val_worker.progress.connect(self._update_progress)
+        self._val_worker.progress_range.connect(self._set_progress_range)
+
+        self._val_thread.finished.connect(self._val_worker.deleteLater)
+        self._val_thread.finished.connect(self._val_thread.deleteLater)
+        self._set_ui_running_state(True)
+        self._val_thread.start()
+
+    def _cleanup_val_thread(self) -> None:
+        if self._val_thread:
+            self._val_thread.quit()
+            self._val_thread.wait(5000)
+        self._val_worker = None
+        self._val_thread = None
+
+    @Slot(object)
+    def _on_validation_finished(self, results_obj: object) -> None:
+        self._cleanup_val_thread()
+        self._set_ui_running_state(False)
+
+        results = results_obj if isinstance(results_obj, list) else []
+        total = len(results)
+        errors = sum(1 for r in results if r.error)
+        comparable = total - errors
+        matches = sum(1 for r in results if r.labels_match)
+
+        msg_lines = ["Validation completed."]
+        msg_lines.append(f"Classified {total} videos.")
+        if comparable > 0:
+            msg_lines.append(f"Agreement with tipper labels: {matches}/{comparable} ({matches / comparable:.0%})")
+        if errors:
+            msg_lines.append(f"Errors: {errors}")
+        if self._current_report_dir:
+            msg_lines.append(f"Results saved to: {self._current_report_dir / 'validation_results.xlsx'}")
+
+        self._show_message_box(QMessageBox.Information, "Validation Complete", "\n".join(msg_lines))
+
+    @Slot(str)
+    def _on_validation_error(self, details: str) -> None:
+        self._cleanup_val_thread()
+        self._set_ui_running_state(False)
+        self._show_message_box(QMessageBox.Critical, "Validation Error", details)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt API name)
         if not self._is_running:
@@ -1033,14 +1262,18 @@ class MainWindow(QMainWindow):
             return
 
         self._cancel_run()
-        if self.thread and self.thread.isRunning():
-            self.thread.quit()
-            if not self.thread.wait(5000):
-                self._show_message_box(
-                    QMessageBox.Warning,
-                    "Still Running",
-                    "Processing is still shutting down. Try again shortly.",
-                )
-                event.ignore()
-                return
+        # Cancel validation if running
+        if self._val_worker:
+            self._val_worker.cancel()
+        for thr in [self.thread, self._val_thread]:
+            if thr and thr.isRunning():
+                thr.quit()
+                if not thr.wait(5000):
+                    self._show_message_box(
+                        QMessageBox.Warning,
+                        "Still Running",
+                        "Processing is still shutting down. Try again shortly.",
+                    )
+                    event.ignore()
+                    return
         event.accept()
