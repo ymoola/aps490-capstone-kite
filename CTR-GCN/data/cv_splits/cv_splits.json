@@ -1,0 +1,217 @@
+{
+  "out_root": "D:\\Brad\\School\\UofT\\Year4\\CSC494_eng\\aps490-capstone-kite\\CV\\outputs\\out_yolo",
+  "config": {
+    "seed": 12345,
+    "k": 5,
+    "val_strategy": "next_fold"
+  },
+  "folds": [
+    {
+      "fold_index": 0,
+      "participants": {
+        "train": [
+          "sub343",
+          "sub373",
+          "sub368",
+          "sub346",
+          "sub352",
+          "sub349",
+          "sub295",
+          "sub364",
+          "sub353"
+        ],
+        "val": [
+          "sub357",
+          "sub367",
+          "sub344"
+        ],
+        "test": [
+          "sub360",
+          "sub356",
+          "sub354"
+        ]
+      },
+      "counts": {
+        "participants": {
+          "train": 9,
+          "val": 3,
+          "test": 3,
+          "total": 15
+        },
+        "samples": {
+          "train": 1013,
+          "val": 365,
+          "test": 245,
+          "total": 1623
+        }
+      }
+    },
+    {
+      "fold_index": 1,
+      "participants": {
+        "train": [
+          "sub360",
+          "sub356",
+          "sub354",
+          "sub346",
+          "sub352",
+          "sub349",
+          "sub295",
+          "sub364",
+          "sub353"
+        ],
+        "val": [
+          "sub343",
+          "sub373",
+          "sub368"
+        ],
+        "test": [
+          "sub357",
+          "sub367",
+          "sub344"
+        ]
+      },
+      "counts": {
+        "participants": {
+          "train": 9,
+          "val": 3,
+          "test": 3,
+          "total": 15
+        },
+        "samples": {
+          "train": 1109,
+          "val": 149,
+          "test": 365,
+          "total": 1623
+        }
+      }
+    },
+    {
+      "fold_index": 2,
+      "participants": {
+        "train": [
+          "sub360",
+          "sub356",
+          "sub354",
+          "sub357",
+          "sub367",
+          "sub344",
+          "sub295",
+          "sub364",
+          "sub353"
+        ],
+        "val": [
+          "sub346",
+          "sub352",
+          "sub349"
+        ],
+        "test": [
+          "sub343",
+          "sub373",
+          "sub368"
+        ]
+      },
+      "counts": {
+        "participants": {
+          "train": 9,
+          "val": 3,
+          "test": 3,
+          "total": 15
+        },
+        "samples": {
+          "train": 1072,
+          "val": 402,
+          "test": 149,
+          "total": 1623
+        }
+      }
+    },
+    {
+      "fold_index": 3,
+      "participants": {
+        "train": [
+          "sub360",
+          "sub356",
+          "sub354",
+          "sub357",
+          "sub367",
+          "sub344",
+          "sub343",
+          "sub373",
+          "sub368"
+        ],
+        "val": [
+          "sub295",
+          "sub364",
+          "sub353"
+        ],
+        "test": [
+          "sub346",
+          "sub352",
+          "sub349"
+        ]
+      },
+      "counts": {
+        "participants": {
+          "train": 9,
+          "val": 3,
+          "test": 3,
+          "total": 15
+        },
+        "samples": {
+          "train": 759,
+          "val": 462,
+          "test": 402,
+          "total": 1623
+        }
+      }
+    },
+    {
+      "fold_index": 4,
+      "participants": {
+        "train": [
+          "sub357",
+          "sub367",
+          "sub344",
+          "sub343",
+          "sub373",
+          "sub368",
+          "sub346",
+          "sub352",
+          "sub349"
+        ],
+        "val": [
+          "sub360",
+          "sub356",
+          "sub354"
+        ],
+        "test": [
+          "sub295",
+          "sub364",
+          "sub353"
+        ]
+      },
+      "counts": {
+        "participants": {
+          "train": 9,
+          "val": 3,
+          "test": 3,
+          "total": 15
+        },
+        "samples": {
+          "train": 916,
+          "val": 245,
+          "test": 462,
+          "total": 1623
+        }
+      }
+    }
+  ],
+  "warnings": [],
+  "notes": {
+    "split_key": "participant (normalized sub### extracted from folder name one level above each npz)",
+    "val_strategy": "val is next fold after test fold (cyclic)",
+    "label_binary": "fail if label_code endswith 'F', else pass",
+    "label_code": "DF/DP/UF/UP"
+  }
+}
