@@ -13,10 +13,13 @@ CTR-GCN/out_openpose
 CTR-GCN/mmaction2
 CTR-GCN/openpose/
 CTR-GCN/splits/
-CTR-GCN/frameworks
+CTR-GCN/frameworks/openpose/
+CTR-GCN/frameworks/mmaction2/
+
 CTR-GCN/outputs/
 CTR-GCN/outputs/
 CTR-GCN/runs/
+CTR-GCN/debugging/
 
 # Production model output (tracked intentionally)
 !CTR-GCN/production/

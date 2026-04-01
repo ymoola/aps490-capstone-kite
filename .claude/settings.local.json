@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python ../production/train_production.py)"
+      "Bash(python ../production/train_production.py)",
+      "Bash(grep -r \"best_model\\\\|checkpoint\\\\|model_state\" /d/Brad/School/UofT/Year4/CSC494_eng/aps490-capstone-kite/CTR-GCN/production --include=*.json)",
+      "Bash(find /d/Brad/School/UofT/Year4/CSC494_eng/aps490-capstone-kite/CTR-GCN -maxdepth 2 -name *.json -type f)",
+      "Bash(for d:*)",
+      "Bash(do echo:*)",
+      "Read(//d/Brad/School/UofT/Year4/CSC494_eng/aps490-capstone-kite/**)",
+      "Bash(done)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''debugging/visualize_failures.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''debugging/debug_inference.py'', doraise=True\\); print\\(''OK''\\)\")"
     ]
   }
 }
