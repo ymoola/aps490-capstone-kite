@@ -411,6 +411,11 @@ def process_all(
 
         date_name = date_dir.name
         tipper_date = config.tippers_dir / date_name
+        # If tippers_dir/date_name doesn't exist, check if the tippers_dir
+        # itself is the date folder (user passed the date-level path directly).
+        if not tipper_date.exists() or not tipper_date.is_dir():
+            if config.tippers_dir.name == date_name:
+                tipper_date = config.tippers_dir
         if not tipper_date.exists() or not tipper_date.is_dir():
             log(f"[WARN] No tipper folder for date {date_name}; skipping.")
             _record_failure(failures, reporter, date_name)
