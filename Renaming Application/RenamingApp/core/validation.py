@@ -8,17 +8,14 @@ Pipeline per video:
   MP4 -> YOLO pose extraction -> interpolation -> smoothing ->
   temporal resampling (T=100) -> normalization -> CTR-GCN inference -> Pass/Fail
 
-The CTR-GCN model architecture is embedded directly so no external repo
-is required at runtime -- only a trained checkpoint (.pt) is needed.
+Both models run via ONNX Runtime — no PyTorch required at runtime.
+Use export_to_onnx.py (dev environment) to convert .pt checkpoints to .onnx.
 """
 
 from __future__ import annotations
 
-import math
 import os
 import re
-import sys
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -29,9 +26,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-# torch / ultralytics are imported lazily inside functions that need them,
-# so the rest of the renaming app works even when they are not installed.
-
 
 # ===================================================================
 # Configuration
@@ -40,14 +34,14 @@ from openpyxl.utils import get_column_letter
 class ValidationConfig:
     """All knobs needed to run the validation pipeline."""
 
-    yolo_model_path: str
-    ctr_gcn_checkpoint_path: str
+    yolo_model_path: str          # path to yolo26x-pose.onnx
+    ctr_gcn_checkpoint_path: str  # path to classifier.onnx
 
-    # Device
+    # Device — "cuda" enables CUDAExecutionProvider in ONNX Runtime
     device: str = "cpu"
 
     # Pose extraction
-    yolo_batch_size: int = 8
+    yolo_batch_size: int = 8      # kept for interface compatibility; ONNX runs per-frame
     conf_thr: float = 0.05
 
     # Preprocessing
@@ -79,482 +73,128 @@ class ValidationResult:
 
 
 # ===================================================================
-# Embedded COCO-17 Graph
+# YOLO ONNX inference helpers
 # ===================================================================
-class COCO17Graph:
+def _letterbox(
+    img: np.ndarray, imgsz: int = 640
+) -> Tuple[np.ndarray, float, int, int]:
+    """Resize + pad image to imgsz x imgsz. Returns (padded_img, ratio, pad_top, pad_left)."""
+    h, w = img.shape[:2]
+    r = min(imgsz / h, imgsz / w)
+    new_w, new_h = int(round(w * r)), int(round(h * r))
+    img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    pad_h = imgsz - new_h
+    pad_w = imgsz - new_w
+    top = pad_h // 2
+    left = pad_w // 2
+    img = cv2.copyMakeBorder(
+        img, top, pad_h - top, left, pad_w - left,
+        cv2.BORDER_CONSTANT, value=(114, 114, 114),
+    )
+    return img, r, top, left
+
+
+def _nms(boxes: np.ndarray, scores: np.ndarray, iou_thr: float) -> List[int]:
+    """CPU non-maximum suppression. boxes: (N, 4) xyxy."""
+    order = scores.argsort()[::-1]
+    keep: List[int] = []
+    while order.size > 0:
+        i = int(order[0])
+        keep.append(i)
+        if order.size == 1:
+            break
+        xx1 = np.maximum(boxes[i, 0], boxes[order[1:], 0])
+        yy1 = np.maximum(boxes[i, 1], boxes[order[1:], 1])
+        xx2 = np.minimum(boxes[i, 2], boxes[order[1:], 2])
+        yy2 = np.minimum(boxes[i, 3], boxes[order[1:], 3])
+        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
+        area_i = (boxes[i, 2] - boxes[i, 0]) * (boxes[i, 3] - boxes[i, 1])
+        area_j = (
+            (boxes[order[1:], 2] - boxes[order[1:], 0])
+            * (boxes[order[1:], 3] - boxes[order[1:], 1])
+        )
+        iou = inter / (area_i + area_j - inter + 1e-6)
+        order = order[1:][iou < iou_thr]
+    return keep
+
+
+def _yolo_postprocess(
+    raw: np.ndarray,
+    ratio: float,
+    pad_top: int,
+    pad_left: int,
+    conf_thr: float = 0.05,
+    iou_thr: float = 0.45,
+) -> List[np.ndarray]:
     """
-    COCO 17-keypoint skeleton graph for CTR-GCN.
+    Decode raw YOLOv8-pose ONNX output into a list of per-person keypoint arrays.
 
-    Keypoints:
-      0: nose, 1: left_eye, 2: right_eye, 3: left_ear, 4: right_ear,
-      5: left_shoulder, 6: right_shoulder, 7: left_elbow, 8: right_elbow,
-      9: left_wrist, 10: right_wrist, 11: left_hip, 12: right_hip,
-      13: left_knee, 14: right_knee, 15: left_ankle, 16: right_ankle
+    Parameters
+    ----------
+    raw : (1, 56, N_anchors) float32
+        Direct output of the ONNX session.
+    ratio, pad_top, pad_left
+        Letterbox parameters from _letterbox().
+
+    Returns
+    -------
+    List of (17, 3) float32 arrays [x_orig, y_orig, conf] in original image coords.
     """
+    # Support both (1, 56, N) and (1, N, 56)
+    if raw.ndim == 3 and raw.shape[1] == 56:
+        pred = raw[0].T          # (N, 56)
+    elif raw.ndim == 3 and raw.shape[2] == 56:
+        pred = raw[0]            # (N, 56)
+    else:
+        return []
 
-    def __init__(self, labeling_mode: str = "spatial", **kwargs):
-        num_node = 17
-        self_link = [(i, i) for i in range(num_node)]
+    scores = pred[:, 4]
+    mask = scores > conf_thr
+    pred = pred[mask]
+    if len(pred) == 0:
+        return []
 
-        # Inward edges: (child, parent) directed toward root (node 0 = nose)
-        inward = [
-            (1, 0), (2, 0),       # eyes -> nose
-            (3, 1), (4, 2),       # ears -> eyes
-            (5, 0), (6, 0),       # shoulders -> nose
-            (7, 5), (8, 6),       # elbows -> shoulders
-            (9, 7), (10, 8),      # wrists -> elbows
-            (11, 5), (12, 6),     # hips -> shoulders
-            (13, 11), (14, 12),   # knees -> hips
-            (15, 13), (16, 14),   # ankles -> knees
-        ]
-        outward = [(j, i) for (i, j) in inward]
+    cx, cy, w, h = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
+    boxes = np.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], axis=1)
+    keep = _nms(boxes, pred[:, 4], iou_thr)
+    pred = pred[keep]
 
-        if labeling_mode == "spatial":
-            self.A = self._spatial_adjacency(num_node, self_link, inward, outward)
-        else:
-            raise ValueError(f"Unknown labeling mode: {labeling_mode}")
+    detections: List[np.ndarray] = []
+    for det in pred:
+        kpts = det[5:].reshape(17, 3).copy()  # x, y, vis in letterbox-640 space
+        kpts[:, 0] = (kpts[:, 0] - pad_left) / ratio
+        kpts[:, 1] = (kpts[:, 1] - pad_top) / ratio
+        detections.append(kpts.astype(np.float32))
+    return detections
 
-        self.num_node = num_node
 
-    @staticmethod
-    def _edge2mat(edges: list, num_node: int) -> np.ndarray:
-        A = np.zeros((num_node, num_node), dtype=np.float32)
-        for i, j in edges:
-            A[j, i] = 1.0
-        return A
+class YoloPoseONNX:
+    """ONNX-Runtime wrapper for a YOLOv8-pose model."""
 
-    @staticmethod
-    def _normalize_digraph(A: np.ndarray) -> np.ndarray:
-        Dl = A.sum(axis=0)
-        Dn = np.zeros_like(A)
-        for i in range(A.shape[0]):
-            if Dl[i] > 0:
-                Dn[i, i] = Dl[i] ** (-1)
-        return A @ Dn
+    def __init__(self, model_path: str, imgsz: int = 640) -> None:
+        import onnxruntime as ort
+        providers = ["CPUExecutionProvider"]
+        self._session = ort.InferenceSession(model_path, providers=providers)
+        self._input_name = self._session.get_inputs()[0].name
+        self._imgsz = imgsz
 
-    @classmethod
-    def _spatial_adjacency(cls, num_node, self_link, inward, outward):
-        I = cls._edge2mat(self_link, num_node)
-        In = cls._normalize_digraph(cls._edge2mat(inward, num_node))
-        Out = cls._normalize_digraph(cls._edge2mat(outward, num_node))
-        return np.stack((I, In, Out))  # (3, V, V)
+    def predict_frame(
+        self, frame: np.ndarray, conf_thr: float = 0.05
+    ) -> List[np.ndarray]:
+        """Run inference on one BGR frame. Returns list of (17, 3) keypoint arrays."""
+        img, ratio, pad_top, pad_left = _letterbox(frame, self._imgsz)
+        inp = (
+            cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            .transpose(2, 0, 1)[np.newaxis]
+            .astype(np.float32)
+            / 255.0
+        )
+        raw = self._session.run(None, {self._input_name: inp})[0]
+        return _yolo_postprocess(raw, ratio, pad_top, pad_left, conf_thr)
 
 
 # ===================================================================
-# Embedded CTR-GCN Model Architecture
-# (faithful reproduction of the official CTR-GCN ICCV 2021 paper)
-# ===================================================================
-
-def _import_torch():
-    import torch
-    import torch.nn as nn
-    return torch, nn
-
-
-def _conv_init(conv):
-    import torch.nn as nn
-    if conv.weight is not None:
-        nn.init.kaiming_normal_(conv.weight, mode="fan_out")
-    if conv.bias is not None:
-        nn.init.constant_(conv.bias, 0)
-
-
-def _bn_init(bn, scale):
-    import torch.nn as nn
-    nn.init.constant_(bn.weight, scale)
-    nn.init.constant_(bn.bias, 0)
-
-
-def _weights_init(m):
-    import torch.nn as nn
-    classname = m.__class__.__name__
-    if classname.find("Conv") != -1:
-        if hasattr(m, "weight") and m.weight is not None:
-            nn.init.kaiming_normal_(m.weight, mode="fan_out")
-        if hasattr(m, "bias") and m.bias is not None:
-            nn.init.constant_(m.bias, 0)
-    elif classname.find("BatchNorm") != -1:
-        if hasattr(m, "weight") and m.weight is not None:
-            m.weight.data.normal_(1.0, 0.02)
-        if hasattr(m, "bias") and m.bias is not None:
-            m.bias.data.fill_(0)
-
-
-class TemporalConv:
-    """Lazy-constructed to avoid top-level torch import."""
-    _cls = None
-
-    @classmethod
-    def get_class(cls):
-        if cls._cls is not None:
-            return cls._cls
-        torch, nn = _import_torch()
-
-        class _TemporalConv(nn.Module):
-            def __init__(self, in_channels, out_channels, kernel_size, stride=1, dilation=1):
-                super().__init__()
-                pad = (kernel_size + (kernel_size - 1) * (dilation - 1) - 1) // 2
-                self.conv = nn.Conv2d(
-                    in_channels, out_channels,
-                    (kernel_size, 1), (stride, 1), (pad, 0), (dilation, 1),
-                )
-                self.bn = nn.BatchNorm2d(out_channels)
-
-            def forward(self, x):
-                return self.bn(self.conv(x))
-
-        cls._cls = _TemporalConv
-        return _TemporalConv
-
-
-class MultiScaleTemporalConv:
-    _cls = None
-
-    @classmethod
-    def get_class(cls):
-        if cls._cls is not None:
-            return cls._cls
-        torch, nn = _import_torch()
-        TC = TemporalConv.get_class()
-
-        class _MultiScaleTemporalConv(nn.Module):
-            def __init__(
-                self,
-                in_channels,
-                out_channels,
-                kernel_size=5,
-                stride=1,
-                dilations=None,
-                residual=True,
-                residual_kernel_size=1,
-            ):
-                super().__init__()
-                if dilations is None:
-                    dilations = [1, 2]
-
-                assert out_channels % (len(dilations) + 2) == 0, (
-                    f"out_channels={out_channels} must be divisible by {len(dilations) + 2}"
-                )
-                self.num_branches = len(dilations) + 2
-                branch_channels = out_channels // self.num_branches
-
-                if isinstance(kernel_size, list):
-                    assert len(kernel_size) == len(dilations)
-                else:
-                    kernel_size = [kernel_size] * len(dilations)
-
-                self.branches = nn.ModuleList()
-                for ks, dilation in zip(kernel_size, dilations):
-                    self.branches.append(nn.Sequential(
-                        nn.Conv2d(in_channels, branch_channels, kernel_size=1, padding=0),
-                        nn.BatchNorm2d(branch_channels),
-                        nn.ReLU(inplace=True),
-                        TC(branch_channels, branch_channels, kernel_size=ks, stride=stride, dilation=dilation),
-                    ))
-
-                # MaxPool branch
-                self.branches.append(nn.Sequential(
-                    nn.Conv2d(in_channels, branch_channels, kernel_size=1, padding=0),
-                    nn.BatchNorm2d(branch_channels),
-                    nn.ReLU(inplace=True),
-                    nn.MaxPool2d(kernel_size=(3, 1), stride=(stride, 1), padding=(1, 0)),
-                    nn.BatchNorm2d(branch_channels),
-                ))
-
-                # Stride-only branch
-                self.branches.append(nn.Sequential(
-                    nn.Conv2d(in_channels, branch_channels, kernel_size=1, stride=(stride, 1), padding=0),
-                    nn.BatchNorm2d(branch_channels),
-                ))
-
-                # Residual connection
-                if not residual:
-                    self.residual = lambda x: 0
-                elif (in_channels == out_channels) and (stride == 1):
-                    self.residual = lambda x: x
-                else:
-                    self.residual = TC(in_channels, out_channels, kernel_size=residual_kernel_size, stride=stride)
-
-                self.apply(_weights_init)
-
-            def forward(self, x):
-                branch_outs = [branch(x) for branch in self.branches]
-                out = torch.cat(branch_outs, dim=1)
-                out += self.residual(x)
-                return out
-
-        cls._cls = _MultiScaleTemporalConv
-        return _MultiScaleTemporalConv
-
-
-class CTRGC:
-    """Channel-wise Topology Refinement Graph Convolution."""
-    _cls = None
-
-    @classmethod
-    def get_class(cls):
-        if cls._cls is not None:
-            return cls._cls
-        torch, nn = _import_torch()
-
-        class _CTRGC(nn.Module):
-            def __init__(self, in_channels, out_channels, rel_reduction=8, mid_reduction=1):
-                super().__init__()
-                self.in_channels = in_channels
-                self.out_channels = out_channels
-                if in_channels == 3 or in_channels == 9:
-                    self.rel_channels = 8
-                    self.mid_channels = 16
-                else:
-                    self.rel_channels = in_channels // rel_reduction
-                    self.mid_channels = in_channels // mid_reduction
-                self.conv1 = nn.Conv2d(self.in_channels, self.rel_channels, kernel_size=1)
-                self.conv2 = nn.Conv2d(self.in_channels, self.rel_channels, kernel_size=1)
-                self.conv3 = nn.Conv2d(self.in_channels, self.out_channels, kernel_size=1)
-                self.conv4 = nn.Conv2d(self.rel_channels, self.out_channels, kernel_size=1)
-                self.tanh = nn.Tanh()
-                for m in self.modules():
-                    if isinstance(m, nn.Conv2d):
-                        _conv_init(m)
-                    elif isinstance(m, nn.BatchNorm2d):
-                        _bn_init(m, 1)
-
-            def forward(self, x, A=None, alpha=1):
-                x1 = self.conv1(x).mean(-2)          # (N, rel_c, V)
-                x2 = self.conv2(x).mean(-2)          # (N, rel_c, V)
-                x3 = self.conv3(x)                    # (N, out_c, T, V)
-                x1 = self.tanh(x1.unsqueeze(-1) - x2.unsqueeze(-2))  # (N, rel_c, V, V)
-                x1 = self.conv4(x1) * alpha + (       # (N, out_c, V, V)
-                    A.unsqueeze(0).unsqueeze(0) if A is not None else 0
-                )
-                x1 = torch.einsum("ncuv,nctv->nctu", x1, x3)
-                return x1
-
-        cls._cls = _CTRGC
-        return _CTRGC
-
-
-class UnitGCN:
-    """Spatial graph convolution unit using CTRGC."""
-    _cls = None
-
-    @classmethod
-    def get_class(cls):
-        if cls._cls is not None:
-            return cls._cls
-        torch, nn = _import_torch()
-        _CTRGC = CTRGC.get_class()
-
-        class _UnitGCN(nn.Module):
-            def __init__(self, in_channels, out_channels, A, adaptive=True):
-                super().__init__()
-                self.out_c = out_channels
-                self.in_c = in_channels
-                self.num_subset = A.shape[0]
-                self.adaptive = adaptive
-
-                if adaptive:
-                    self.PA = nn.Parameter(torch.from_numpy(A.astype(np.float32)))
-                else:
-                    self.A = torch.autograd.Variable(
-                        torch.from_numpy(A.astype(np.float32)), requires_grad=False,
-                    )
-
-                self.convs = nn.ModuleList()
-                for _ in range(self.num_subset):
-                    self.convs.append(_CTRGC(in_channels, out_channels))
-                self.alpha = nn.Parameter(torch.zeros(1))
-
-                if in_channels != out_channels:
-                    self.down = nn.Sequential(
-                        nn.Conv2d(in_channels, out_channels, 1),
-                        nn.BatchNorm2d(out_channels),
-                    )
-                else:
-                    self.down = lambda x: x
-
-                self.bn = nn.BatchNorm2d(out_channels)
-                self.relu = nn.ReLU(inplace=True)
-
-                for m in self.modules():
-                    if isinstance(m, nn.Conv2d):
-                        _conv_init(m)
-                    elif isinstance(m, nn.BatchNorm2d):
-                        _bn_init(m, 1)
-                _bn_init(self.bn, 1e-6)
-
-            def forward(self, x):
-                if self.adaptive:
-                    A = self.PA
-                else:
-                    A = self.A.cuda(x.get_device()) if x.is_cuda else self.A
-
-                y = None
-                for i in range(self.num_subset):
-                    z = self.convs[i](x, A[i], alpha=self.alpha)
-                    y = z + y if y is not None else z
-                y = self.bn(y)
-                y += self.down(x)
-                y = self.relu(y)
-                return y
-
-        cls._cls = _UnitGCN
-        return _UnitGCN
-
-
-class TCNGCNUnit:
-    """Combined temporal + spatial convolution block."""
-    _cls = None
-
-    @classmethod
-    def get_class(cls):
-        if cls._cls is not None:
-            return cls._cls
-        torch, nn = _import_torch()
-        _UnitGCN = UnitGCN.get_class()
-        _MSTCN = MultiScaleTemporalConv.get_class()
-
-        _TC = TemporalConv.get_class()
-
-        class _TCNGCNUnit(nn.Module):
-            def __init__(
-                self,
-                in_channels,
-                out_channels,
-                A,
-                stride=1,
-                residual=True,
-                adaptive=True,
-                kernel_size=5,
-                dilations=None,
-            ):
-                super().__init__()
-                if dilations is None:
-                    dilations = [1, 2]
-                self.gcn1 = _UnitGCN(in_channels, out_channels, A, adaptive=adaptive)
-                # MSTCN never owns the residual — the unit-level self.residual handles it
-                self.tcn1 = _MSTCN(
-                    out_channels, out_channels,
-                    stride=stride, kernel_size=kernel_size, dilations=dilations,
-                    residual=False,
-                )
-                self.relu = nn.ReLU(inplace=True)
-
-                # Unit-level residual only for channel mismatch — stored as plain TC
-                # (no residual for stride-only, that lives inside tcn1)
-                if not residual:
-                    self.residual = lambda x: 0
-                elif in_channels == out_channels:
-                    self.residual = lambda x: x
-                else:
-                    self.residual = _TC(in_channels, out_channels, kernel_size=1, stride=stride)
-
-            def forward(self, x):
-                y = self.relu(self.tcn1(self.gcn1(x)) + self.residual(x))
-                return y
-
-        cls._cls = _TCNGCNUnit
-        return _TCNGCNUnit
-
-
-class CTRGCNModel:
-    """Full CTR-GCN classifier."""
-    _cls = None
-
-    @classmethod
-    def get_class(cls):
-        if cls._cls is not None:
-            return cls._cls
-        torch, nn = _import_torch()
-        _TCNGCNUnit = TCNGCNUnit.get_class()
-
-        class _CTRGCNModel(nn.Module):
-            def __init__(
-                self,
-                num_class=2,
-                num_point=17,
-                num_person=1,
-                in_channels=3,
-                graph=None,
-                graph_args=None,
-                drop_out=0,
-                adaptive=True,
-            ):
-                super().__init__()
-
-                # Build graph adjacency
-                if graph_args is None:
-                    graph_args = {}
-                if isinstance(graph, np.ndarray):
-                    A = graph
-                else:
-                    # Use embedded COCO-17 graph regardless of the string value
-                    A = COCO17Graph(**graph_args).A
-
-                self.num_point = num_point
-                self.data_bn = nn.BatchNorm1d(num_person * in_channels * num_point)
-
-                base_channel = 64
-                self.l1 = _TCNGCNUnit(in_channels, base_channel, A, residual=False, adaptive=adaptive)
-                self.l2 = _TCNGCNUnit(base_channel, base_channel, A, adaptive=adaptive)
-                self.l3 = _TCNGCNUnit(base_channel, base_channel, A, adaptive=adaptive)
-                self.l4 = _TCNGCNUnit(base_channel, base_channel, A, adaptive=adaptive)
-                self.l5 = _TCNGCNUnit(base_channel, base_channel * 2, A, stride=2, adaptive=adaptive)
-                self.l6 = _TCNGCNUnit(base_channel * 2, base_channel * 2, A, adaptive=adaptive)
-                self.l7 = _TCNGCNUnit(base_channel * 2, base_channel * 2, A, adaptive=adaptive)
-                self.l8 = _TCNGCNUnit(base_channel * 2, base_channel * 4, A, stride=2, adaptive=adaptive)
-                self.l9 = _TCNGCNUnit(base_channel * 4, base_channel * 4, A, adaptive=adaptive)
-                self.l10 = _TCNGCNUnit(base_channel * 4, base_channel * 4, A, adaptive=adaptive)
-
-                self.fc = nn.Linear(base_channel * 4, num_class)
-                nn.init.normal_(self.fc.weight, 0, math.sqrt(2.0 / num_class))
-                _bn_init(self.data_bn, 1)
-
-                if drop_out:
-                    self.drop_out = nn.Dropout(drop_out)
-                else:
-                    self.drop_out = lambda x: x
-
-            def forward(self, x):
-                # x: (N, C, T, V, M)
-                if x.size(-1) > 1:
-                    raise NotImplementedError("Multi-person not supported in this build")
-
-                N, C, T, V, M = x.size()
-                x = x.permute(0, 4, 3, 1, 2).contiguous().view(N, M * V * C, T)
-                x = self.data_bn(x)
-                x = (
-                    x.view(N, M, V, C, T)
-                    .permute(0, 1, 3, 4, 2)
-                    .contiguous()
-                    .view(N * M, C, T, V)
-                )
-
-                x = self.l1(x)
-                x = self.l2(x)
-                x = self.l3(x)
-                x = self.l4(x)
-                x = self.l5(x)
-                x = self.l6(x)
-                x = self.l7(x)
-                x = self.l8(x)
-                x = self.l9(x)
-                x = self.l10(x)
-
-                # N*M, C, T, V
-                c_new = x.size(1)
-                x = x.view(N, M, c_new, -1)
-                x = x.mean(3).mean(1)
-                x = self.drop_out(x)
-                return self.fc(x)
-
-        cls._cls = _CTRGCNModel
-        return _CTRGCNModel
-
-
-# ===================================================================
-# YOLO Pose Extraction
-# (adapted from CV/code/pose_estimators/yolo.py)
+# Person selection helpers
 # ===================================================================
 def _skeleton_center(
     xy: np.ndarray, conf: Optional[np.ndarray], conf_thr: float,
@@ -581,52 +221,34 @@ def _skeleton_area(
 
 
 def _pick_single_person(
-    result0,
+    detections: List[np.ndarray],
     num_kpts: int = 17,
     prev_center: Optional[np.ndarray] = None,
     conf_thr: float = 0.05,
     width: int = 1920,
     height: int = 1080,
 ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-    """Select the most likely single person from a YOLO pose result."""
+    """
+    Select the most likely single person from ONNX-decoded detections.
 
-    if result0.keypoints is None:
+    Parameters
+    ----------
+    detections : list of (V, 3) float32 arrays [x, y, conf] in original image coords.
+    """
+    if not detections:
         return np.zeros((num_kpts, 3), dtype=np.float32), prev_center
 
-    kpts = result0.keypoints
-    if kpts.xy is None or len(kpts) == 0:
-        return np.zeros((num_kpts, 3), dtype=np.float32), prev_center
+    if len(detections) == 1:
+        kpts = detections[0]
+        center = _skeleton_center(kpts[:, :2], kpts[:, 2], conf_thr)
+        return kpts, center
 
-    xy = kpts.xy.cpu().numpy()  # (M, V, 2)
-    conf = (
-        kpts.conf.cpu().numpy()
-        if getattr(kpts, "conf", None) is not None
-        else None
-    )
-    M, V = xy.shape[0], xy.shape[1]
+    M = len(detections)
+    xy = np.stack([d[:, :2] for d in detections])   # (M, V, 2)
+    conf = np.stack([d[:, 2] for d in detections])  # (M, V)
 
-    # Single person fast path
-    if M == 1:
-        out = np.zeros((V, 3), dtype=np.float32)
-        out[:, :2] = xy[0]
-        out[:, 2] = conf[0] if conf is not None else 1.0
-        center = _skeleton_center(
-            xy[0], conf[0] if conf is not None else None, conf_thr,
-        )
-        return out, center
-
-    # No confidence info -> pick largest skeleton
-    if conf is None:
-        areas = [_skeleton_area(xy[i], None, conf_thr) for i in range(M)]
-        chosen = int(np.argmax(areas))
-        out = np.zeros((V, 3), dtype=np.float32)
-        out[:, :2] = xy[chosen]
-        out[:, 2] = 1.0
-        return out, _skeleton_center(xy[chosen], None, conf_thr)
-
-    # Composite scoring: size + tracking + confidence
     centers = np.stack(
-        [_skeleton_center(xy[i], conf[i], conf_thr) for i in range(M)],
+        [_skeleton_center(xy[i], conf[i], conf_thr) for i in range(M)]
     )
     areas = np.array(
         [_skeleton_area(xy[i], conf[i], conf_thr) for i in range(M)],
@@ -651,22 +273,20 @@ def _pick_single_person(
 
     score = 0.55 * size_norm + 0.20 * track_score + 0.25 * conf_norm
     chosen = int(np.argmax(score))
-
-    out = np.zeros((V, 3), dtype=np.float32)
-    out[:, 0] = xy[chosen, :, 0]
-    out[:, 1] = xy[chosen, :, 1]
-    out[:, 2] = conf[chosen]
-    return out, centers[chosen]
+    return detections[chosen], centers[chosen]
 
 
+# ===================================================================
+# Pose extraction
+# ===================================================================
 def extract_poses(
     video_path: str,
-    yolo_model,
-    batch_size: int = 8,
+    yolo_model: YoloPoseONNX,
+    batch_size: int = 8,   # unused in ONNX path; kept for interface compatibility
     conf_thr: float = 0.05,
 ) -> Tuple[np.ndarray, dict]:
     """
-    Extract per-frame poses from a video using a YOLO pose model.
+    Extract per-frame poses from a video using a YOLO pose ONNX model.
 
     Returns
     -------
@@ -681,40 +301,22 @@ def extract_poses(
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    poses_list: list[np.ndarray] = []
+    poses_list: List[np.ndarray] = []
     prev_center: Optional[np.ndarray] = None
-    batch: list[np.ndarray] = []
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        batch.append(frame)
-
-        if len(batch) >= batch_size:
-            results = yolo_model(batch, verbose=False)
-            for r in results:
-                kpt, prev_center = _pick_single_person(
-                    r,
-                    prev_center=prev_center,
-                    conf_thr=conf_thr,
-                    width=width,
-                    height=height,
-                )
-                poses_list.append(kpt)
-            batch.clear()
-
-    if batch:
-        results = yolo_model(batch, verbose=False)
-        for r in results:
-            kpt, prev_center = _pick_single_person(
-                r,
-                prev_center=prev_center,
-                conf_thr=conf_thr,
-                width=width,
-                height=height,
-            )
-            poses_list.append(kpt)
+        detections = yolo_model.predict_frame(frame, conf_thr=conf_thr)
+        kpt, prev_center = _pick_single_person(
+            detections,
+            prev_center=prev_center,
+            conf_thr=conf_thr,
+            width=width,
+            height=height,
+        )
+        poses_list.append(kpt)
 
     cap.release()
 
@@ -732,7 +334,6 @@ def extract_poses(
 
 # ===================================================================
 # Preprocessing
-# (adapted from CV/code/preprocessing/)
 # ===================================================================
 def interpolate_poses(
     poses: np.ndarray,
@@ -748,7 +349,6 @@ def interpolate_poses(
     T_out = (T - 1) * scale_factor + 1
     out = np.zeros((T_out, V, C), dtype=np.float32)
 
-    # Frame validity: needs enough confident keypoints
     frame_ok = (poses[:, :, 2] >= conf_thr).sum(axis=1) >= min_kpts
 
     for t in range(T - 1):
@@ -756,7 +356,7 @@ def interpolate_poses(
         out[base] = poses[t] if frame_ok[t] else 0.0
 
         if not (frame_ok[t] and frame_ok[t + 1]):
-            continue  # leave in-betweens as zeros
+            continue
 
         a, b = poses[t], poses[t + 1]
         kp_ok = (a[:, 2] >= conf_thr) & (b[:, 2] >= conf_thr)
@@ -771,7 +371,6 @@ def interpolate_poses(
                     (1 - u) * a[kp_ok, 2] + u * b[kp_ok, 2], 0, 1,
                 )
 
-    # Last frame
     out[-1] = poses[-1] if frame_ok[-1] else 0.0
     return out
 
@@ -816,12 +415,10 @@ def prepare_for_model(
     poses: np.ndarray,
     meta: dict,
     fixed_t: int = 100,
-) -> "torch.Tensor":
+) -> np.ndarray:
     """
-    Convert (T, V, 3) poses to a batched CTR-GCN tensor (1, C=3, T, V, M=1).
+    Convert (T, V, 3) poses to CTR-GCN input array (1, C=3, T, V, M=1) float32.
     """
-    import torch
-
     T_orig, V, C = poses.shape
     width, height = meta["width"], meta["height"]
 
@@ -829,7 +426,6 @@ def prepare_for_model(
     poses[..., 0] /= float(width)
     poses[..., 1] /= float(height)
 
-    # Temporal resampling / padding
     if T_orig >= fixed_t:
         idx = _uniform_sample(T_orig, fixed_t)
         poses_t = poses[idx]
@@ -839,181 +435,11 @@ def prepare_for_model(
 
     # (T, V, C) -> (C, T, V) -> (C, T, V, 1) -> (1, C, T, V, 1)
     data = poses_t.transpose(2, 0, 1)[..., np.newaxis]
-    return torch.from_numpy(data[np.newaxis]).float()
+    return data[np.newaxis].astype(np.float32)
 
 
 # ===================================================================
-# Model Loading
-# ===================================================================
-def _load_legacy_dir_checkpoint(dir_path: str, map_location=None):
-    """
-    Load a PyTorch checkpoint stored in the legacy directory format:
-      dir_path/
-        data.pkl          -- pickled object with persistent storage refs
-        data/0, data/1 .. -- raw binary tensor storage files
-    """
-    import pickle
-    import torch
-
-    data_dir = os.path.join(dir_path, "data")
-    cached: dict = {}
-
-    # Map storage class name -> torch dtype
-    _type_to_dtype = {
-        "FloatStorage":    torch.float32,
-        "DoubleStorage":   torch.float64,
-        "HalfStorage":     torch.float16,
-        "BFloat16Storage": torch.bfloat16,
-        "LongStorage":     torch.int64,
-        "IntStorage":      torch.int32,
-        "ShortStorage":    torch.int16,
-        "ByteStorage":     torch.uint8,
-        "CharStorage":     torch.int8,
-        "BoolStorage":     torch.bool,
-    }
-
-    def _get_storage(storage_type, key, numel):
-        if key in cached:
-            return cached[key]
-
-        storage_path = os.path.join(data_dir, str(key))
-        numel = int(numel)
-
-        # Resolve dtype from the storage class name
-        type_name = getattr(storage_type, "__name__", str(storage_type))
-        torch_dtype = _type_to_dtype.get(type_name, torch.float32)
-        elem_size = torch.tensor([], dtype=torch_dtype).element_size()
-
-        with open(storage_path, "rb") as f:
-            data = f.read(numel * elem_size)
-
-        # Build UntypedStorage then wrap in TypedStorage so _rebuild_tensor_v2
-        # can read the .dtype attribute it requires.
-        untyped = torch.UntypedStorage.from_buffer(data, byte_order="little", dtype=torch.uint8)
-        st = torch.storage.TypedStorage(wrap_storage=untyped, dtype=torch_dtype)
-
-        cached[key] = st
-        return st
-
-    class _Unpickler(pickle.Unpickler):
-        def persistent_load(self, pid):
-            # Normalize bytes → str for very old formats
-            if isinstance(pid[0], bytes):
-                pid = tuple(p.decode() if isinstance(p, bytes) else p for p in pid)
-            if pid[0] != "storage":
-                return pid
-            _, storage_type, key, _location, numel = pid
-            return _get_storage(storage_type, key, numel)
-
-    pkl_path = os.path.join(dir_path, "data.pkl")
-    with open(pkl_path, "rb") as f:
-        return _Unpickler(f).load()
-
-
-def load_ctr_gcn_model(config: ValidationConfig):
-    """Build the CTR-GCN model and load trained weights from checkpoint."""
-    import torch
-
-    ckpt_path = os.path.abspath(os.path.expanduser(config.ctr_gcn_checkpoint_path))
-    if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-
-    device = torch.device(config.device)
-
-    if os.path.isdir(ckpt_path):
-        ckpt = _load_legacy_dir_checkpoint(ckpt_path, map_location=device)
-    else:
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-
-    _Model = CTRGCNModel.get_class()
-
-    default_model_kwargs = {
-        "num_class": config.num_class,
-        "num_point": config.num_point,
-        "num_person": config.num_person,
-        "in_channels": config.in_channels,
-        "graph": "graph.coco17.Graph",
-        "graph_args": {},
-        "drop_out": 0.0,
-    }
-
-    def _try_load(model, state_dict):
-        """Try strict then non-strict load; raise with diagnostics on failure."""
-        try:
-            model.load_state_dict(state_dict, strict=True)
-            return
-        except RuntimeError:
-            pass
-        # Try stripping common prefixes (e.g. "module." from DataParallel)
-        stripped = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
-        try:
-            model.load_state_dict(stripped, strict=True)
-            return
-        except RuntimeError:
-            pass
-        # Non-strict as last resort — report what's missing/unexpected
-        missing, unexpected = model.load_state_dict(stripped, strict=False)
-        if missing or unexpected:
-            import warnings
-            warnings.warn(
-                f"Checkpoint loaded non-strictly. "
-                f"Missing keys ({len(missing)}): {missing[:5]}... "
-                f"Unexpected keys ({len(unexpected)}): {unexpected[:5]}..."
-            )
-
-    if isinstance(ckpt, torch.nn.Module):
-        # Full model was saved directly
-        model = ckpt
-    elif isinstance(ckpt, dict):
-        # Determine which key holds the state dict
-        # Common keys: "model_state", "model", "state_dict", or the dict IS the state dict
-        state_dict = None
-        for key in ("model_state", "model", "state_dict", "net", "weights"):
-            if key in ckpt:
-                state_dict = ckpt[key]
-                break
-
-        # If none of the known keys matched, assume the dict itself is the state dict
-        # (i.e. torch.save(model.state_dict(), path))
-        if state_dict is None:
-            # Validate: does it look like a state dict (values are tensors)?
-            first_val = next(iter(ckpt.values()), None)
-            if isinstance(first_val, torch.Tensor):
-                state_dict = ckpt
-            else:
-                top_keys = list(ckpt.keys())
-                raise RuntimeError(
-                    f"Unrecognized checkpoint format. Top-level keys: {top_keys}"
-                )
-
-        model_kwargs = (ckpt.get("model_kwargs") or {}) if isinstance(ckpt, dict) else {}
-        if not model_kwargs:
-            model_kwargs = default_model_kwargs
-        model = _Model(**model_kwargs)
-        _try_load(model, state_dict)
-    else:
-        raise RuntimeError(
-            f"Unrecognized checkpoint format at {ckpt_path} "
-            f"(type={type(ckpt).__name__}). Expected dict or nn.Module."
-        )
-
-    model = model.to(device)
-    model.eval()
-    return model
-
-
-def load_yolo_model(model_path: str):
-    """Load YOLO pose estimation model."""
-    from ultralytics import YOLO
-
-    path = os.path.abspath(os.path.expanduser(model_path))
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"YOLO model not found: {path}")
-    return YOLO(path)
-
-
-# ===================================================================
-# Label extraction from tipper / renamed filenames
+# Label extraction
 # ===================================================================
 def extract_tipper_label(filename: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -1037,8 +463,8 @@ _RESULT_READABLE = {"P": "Pass", "F": "Fail", "U": "Undecided"}
 # ===================================================================
 def classify_video(
     video_path: str,
-    yolo_model,
-    ctr_gcn_model,
+    yolo_model: YoloPoseONNX,
+    ctr_gcn_session,
     config: ValidationConfig,
 ) -> Tuple[str, float]:
     """
@@ -1046,8 +472,6 @@ def classify_video(
 
     Returns ``(predicted_label, confidence)`` where label is 'Pass' or 'Fail'.
     """
-    import torch
-
     # 1. Pose extraction
     poses, meta = extract_poses(
         video_path,
@@ -1064,20 +488,21 @@ def classify_video(
 
     # 3. Smoothing
     if config.do_smooth:
-        poses = smooth_poses(
-            poses, alpha=config.ema_alpha, conf_thr=config.conf_thr,
-        )
+        poses = smooth_poses(poses, alpha=config.ema_alpha, conf_thr=config.conf_thr)
 
-    # 4. Prepare tensor
+    # 4. Prepare input
     data = prepare_for_model(poses, meta, fixed_t=config.fixed_t)
-    data = data.to(config.device)
 
-    # 5. Inference
-    with torch.no_grad():
-        logits = ctr_gcn_model(data)          # (1, num_class)
-        probs = torch.softmax(logits, dim=1)  # (1, num_class)
-        pred = int(torch.argmax(probs, dim=1).item())
-        confidence = float(probs[0, pred].item())
+    # 5. ONNX inference
+    input_name = ctr_gcn_session.get_inputs()[0].name
+    logits = ctr_gcn_session.run(None, {input_name: data})[0]  # (1, num_class)
+
+    # 6. Softmax + argmax (pure numpy)
+    shifted = logits - logits.max(axis=1, keepdims=True)
+    exp = np.exp(shifted)
+    probs = exp / exp.sum(axis=1, keepdims=True)
+    pred = int(np.argmax(probs[0]))
+    confidence = float(probs[0, pred])
 
     label = "Pass" if pred == 0 else "Fail"
     return label, confidence
@@ -1100,21 +525,26 @@ def validate_videos(
     ----------
     video_entries
         List of ``(original_filename, renamed_filename, video_file_path)`` tuples.
-        ``video_file_path`` must point to the actual file to process.
     config
         Full validation configuration.
     log / progress / stop_requested
         Callbacks for UI integration.
-
-    Returns
-    -------
-    List[ValidationResult]
     """
+    import onnxruntime as ort
+
+    providers = (
+        ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if config.device == "cuda"
+        else ["CPUExecutionProvider"]
+    )
+
     log("[Validate] Loading YOLO model...")
-    yolo_model = load_yolo_model(config.yolo_model_path)
+    yolo_model = YoloPoseONNX(config.yolo_model_path)
 
     log("[Validate] Loading CTR-GCN model...")
-    ctr_gcn_model = load_ctr_gcn_model(config)
+    ctr_gcn_session = ort.InferenceSession(
+        config.ctr_gcn_checkpoint_path, providers=providers
+    )
 
     results: List[ValidationResult] = []
     total = len(video_entries)
@@ -1133,7 +563,7 @@ def validate_videos(
 
         try:
             pred_label, pred_prob = classify_video(
-                path, yolo_model, ctr_gcn_model, config,
+                path, yolo_model, ctr_gcn_session, config,
             )
 
             if tipper_readable in ("Pass", "Fail"):

@@ -1121,19 +1121,28 @@ class MainWindow(QMainWindow):
     _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
 
     def _start_validation(self) -> None:
+        try:
+            self._start_validation_impl()
+        except Exception:
+            self._show_error(traceback.format_exc())
+
+    def _start_validation_impl(self) -> None:
         if self._is_running:
             return
 
-        # Hardcoded model paths (relative to repo root)
-        repo_root = Path(__file__).resolve().parent.parent.parent.parent
-        yolo_abs = repo_root / "models" / "yolo26x-pose.pt"
-        ckpt_abs = repo_root / "models" / "classifier"
+        # Hardcoded model paths — use _MEIPASS when frozen, repo root otherwise
+        if getattr(sys, "frozen", False):
+            base = Path(sys._MEIPASS)
+        else:
+            base = Path(__file__).resolve().parent.parent.parent.parent
+        yolo_abs = base / "models" / "yolo26x-pose.onnx"
+        ckpt_abs = base / "models" / "classifier.onnx"
 
         if not yolo_abs.is_file():
             self._show_error(f"YOLO model file not found: {yolo_abs}")
             return
-        if not ckpt_abs.exists():
-            self._show_error(f"CTR-GCN checkpoint not found: {ckpt_abs}")
+        if not ckpt_abs.is_file():
+            self._show_error(f"CTR-GCN model file not found: {ckpt_abs}")
             return
 
         report_dir = self._current_report_dir
@@ -1177,9 +1186,8 @@ class MainWindow(QMainWindow):
             self._show_error("No video files found to validate.")
             return
 
-        import torch
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        import onnxruntime as ort
+        device = "cuda" if "CUDAExecutionProvider" in ort.get_available_providers() else "cpu"
 
         config = ValidationConfig(
             yolo_model_path=str(yolo_abs),
