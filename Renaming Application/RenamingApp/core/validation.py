@@ -664,6 +664,7 @@ def extract_poses(
     yolo_model,
     batch_size: int = 8,
     conf_thr: float = 0.05,
+    device: Optional[str] = None,
 ) -> Tuple[np.ndarray, dict]:
     """
     Extract per-frame poses from a video using a YOLO pose model.
@@ -684,6 +685,9 @@ def extract_poses(
     poses_list: list[np.ndarray] = []
     prev_center: Optional[np.ndarray] = None
     batch: list[np.ndarray] = []
+    infer_kwargs = {"verbose": False}
+    if device:
+        infer_kwargs["device"] = device
 
     while True:
         ret, frame = cap.read()
@@ -692,7 +696,7 @@ def extract_poses(
         batch.append(frame)
 
         if len(batch) >= batch_size:
-            results = yolo_model(batch, verbose=False)
+            results = yolo_model(batch, **infer_kwargs)
             for r in results:
                 kpt, prev_center = _pick_single_person(
                     r,
@@ -705,7 +709,7 @@ def extract_poses(
             batch.clear()
 
     if batch:
-        results = yolo_model(batch, verbose=False)
+        results = yolo_model(batch, **infer_kwargs)
         for r in results:
             kpt, prev_center = _pick_single_person(
                 r,
@@ -1054,6 +1058,7 @@ def classify_video(
         yolo_model,
         batch_size=config.yolo_batch_size,
         conf_thr=config.conf_thr,
+        device=config.device,
     )
 
     # 2. Interpolation
