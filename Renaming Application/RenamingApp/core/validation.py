@@ -785,7 +785,7 @@ def smooth_poses(
     alpha: float = 0.7,
     conf_thr: float = 0.05,
 ) -> np.ndarray:
-    """EMA smoothing.  Input (T, V, 3)."""
+    """EMA smoothing with hold-policy semantics. Input (T, V, 3)."""
     T = poses.shape[0]
     out = np.empty_like(poses)
     prev = poses[0].copy()
@@ -799,10 +799,9 @@ def smooth_poses(
         if valid.any():
             sm[valid, :2] = alpha * kp[valid, :2] + (1 - alpha) * prev[valid, :2]
 
-        sm[~valid, :2] = 0.0
-        sm[~valid, 2] = 0.0
+        # Match CTR-GCN preprocessing: if a keypoint is missing, keep the
+        # previous smoothed x/y instead of zeroing the joint out.
         sm[:, 2] = kp[:, 2]
-        sm[~valid, 2] = 0.0
 
         prev = sm
         out[t] = sm
