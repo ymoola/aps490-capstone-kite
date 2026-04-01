@@ -8,3 +8,5 @@ openpyxl
 # Validation (CV model) dependencies
 torch
 ultralytics
+onnxruntime==1.19.2
+onnxscript
