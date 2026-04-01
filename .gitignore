@@ -240,3 +240,5 @@ maa_parsed.xlsx
 *.xlsx
 
 BaselineModelCode/
+
+models/
