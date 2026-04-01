@@ -16,8 +16,6 @@ CTR-GCN/out/
 CTR-GCN/models/
 
 CTR-GCN/out_openpose
-CTR-GCN/mmaction2
-CTR-GCN/openpose/
 CTR-GCN/splits/
 CTR-GCN/frameworks/openpose/
 CTR-GCN/frameworks/mmaction2/
@@ -248,4 +246,5 @@ maa_parsed.xlsx
 *.xlsx
 
 BaselineModelCode/
+
 models/
