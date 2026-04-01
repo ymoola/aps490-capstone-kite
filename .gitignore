@@ -1,3 +1,9 @@
+CV/
+best_model.pt*
+run_reports
+.claude
+models/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -242,3 +248,4 @@ maa_parsed.xlsx
 *.xlsx
 
 BaselineModelCode/
+models/
