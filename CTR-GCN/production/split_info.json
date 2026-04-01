@@ -1,0 +1,27 @@
+{
+  "seed": 42,
+  "val_ratio": 0.2,
+  "train_participants": [
+    "sub344",
+    "sub346",
+    "sub349",
+    "sub352",
+    "sub353",
+    "sub354",
+    "sub356",
+    "sub357",
+    "sub364",
+    "sub367",
+    "sub368",
+    "sub373"
+  ],
+  "val_participants": [
+    "sub295",
+    "sub343",
+    "sub360"
+  ],
+  "train_samples": 1328,
+  "val_samples": 295,
+  "total_participants": 15,
+  "total_samples": 1623
+}

@@ -284,6 +284,7 @@ def extract_poses(
     yolo_model: YoloPoseONNX,
     batch_size: int = 8,   # unused in ONNX path; kept for interface compatibility
     conf_thr: float = 0.05,
+    device: Optional[str] = None,
 ) -> Tuple[np.ndarray, dict]:
     """
     Extract per-frame poses from a video using a YOLO pose ONNX model.
@@ -478,6 +479,7 @@ def classify_video(
         yolo_model,
         batch_size=config.yolo_batch_size,
         conf_thr=config.conf_thr,
+        device=config.device,
     )
 
     # 2. Interpolation
