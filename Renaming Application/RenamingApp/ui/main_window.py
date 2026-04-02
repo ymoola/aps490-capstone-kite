@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 import traceback
 from concurrent.futures import Future, TimeoutError
 from pathlib import Path
@@ -43,6 +44,7 @@ from RenamingApp.core.reporting import MappingEntry, ReportCollector
 from RenamingApp.core.validation import (
     ValidationConfig,
     ValidationResult,
+    resolve_validation_execution,
     validate_videos,
     write_validation_report,
 )
@@ -1135,10 +1137,23 @@ class MainWindow(QMainWindow):
             base = Path(sys._MEIPASS)
         else:
             base = Path(__file__).resolve().parent.parent.parent.parent
-        yolo_abs = base / "models" / "yolo26x-pose.onnx"
+        model_dir = base / "models"
+        if platform.system() == "Darwin":
+            yolo_candidates = [
+                model_dir / "yolo26x-pose.mlpackage",
+                model_dir / "yolo26x-pose.mlmodel",
+                model_dir / "yolo26x-pose.onnx",
+            ]
+        else:
+            yolo_candidates = [
+                model_dir / "yolo26x-pose.onnx",
+                model_dir / "yolo26x-pose.mlpackage",
+                model_dir / "yolo26x-pose.mlmodel",
+            ]
+        yolo_abs = next((candidate for candidate in yolo_candidates if candidate.exists()), yolo_candidates[0])
         ckpt_abs = base / "models" / "classifier.onnx"
 
-        if not yolo_abs.is_file():
+        if not yolo_abs.exists():
             self._show_error(f"YOLO model file not found: {yolo_abs}")
             return
         if not ckpt_abs.is_file():
@@ -1186,17 +1201,20 @@ class MainWindow(QMainWindow):
             self._show_error("No video files found to validate.")
             return
 
-        import onnxruntime as ort
-        device = "cuda" if "CUDAExecutionProvider" in ort.get_available_providers() else "cpu"
+        (yolo_backend, yolo_providers), (ctr_backend, ctr_providers) = resolve_validation_execution(
+            "auto", str(yolo_abs)
+        )
 
         config = ValidationConfig(
             yolo_model_path=str(yolo_abs),
             ctr_gcn_checkpoint_path=str(ckpt_abs),
-            device=device,
+            device="auto",
         )
 
         self.log_panel.append_line(
-            f"[Validate] Starting validation on {len(video_entries)} videos (device={device})..."
+            f"[Validate] Starting validation on {len(video_entries)} videos "
+            f"(preferred backends: YOLO={yolo_backend} ({', '.join(yolo_providers)}), "
+            f"CTR-GCN={ctr_backend} ({', '.join(ctr_providers)}))..."
         )
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)

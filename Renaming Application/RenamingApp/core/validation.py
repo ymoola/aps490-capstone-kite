@@ -8,16 +8,19 @@ Pipeline per video:
   MP4 -> YOLO pose extraction -> interpolation -> smoothing ->
   temporal resampling (T=100) -> normalization -> CTR-GCN inference -> Pass/Fail
 
-Both models run via ONNX Runtime — no PyTorch required at runtime.
-Use export_to_onnx.py (dev environment) to convert .pt checkpoints to .onnx.
+Runtime backends:
+  - Cross-platform default: YOLO ONNX + CTR-GCN ONNX Runtime
+  - macOS optimized: direct CoreML YOLO + CTR-GCN ONNX Runtime
+
+No PyTorch is required at runtime.
 """
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+import platform
 from typing import Callable, List, Optional, Tuple
 
 import cv2
@@ -34,11 +37,13 @@ from openpyxl.utils import get_column_letter
 class ValidationConfig:
     """All knobs needed to run the validation pipeline."""
 
-    yolo_model_path: str          # path to yolo26x-pose.onnx
+    yolo_model_path: str          # path to yolo26x-pose.onnx/.mlpackage/.mlmodel
     ctr_gcn_checkpoint_path: str  # path to classifier.onnx
 
-    # Device — "cuda" enables CUDAExecutionProvider in ONNX Runtime
-    device: str = "cpu"
+    # Execution backend preference:
+    #   auto -> CUDA, then CPU
+    #   coreml -> explicit opt-in only (kept for debugging; not used by default)
+    device: str = "auto"
 
     # Pose extraction
     yolo_batch_size: int = 8      # kept for interface compatibility; ONNX runs per-frame
@@ -70,6 +75,136 @@ class ValidationResult:
     predicted_prob: float   # softmax confidence
     labels_match: bool
     error: Optional[str] = None
+
+
+def _is_coreml_model_path(model_path: Optional[str]) -> bool:
+    if not model_path:
+        return False
+    return Path(model_path).suffix.lower() in {".mlpackage", ".mlmodel"}
+
+
+def _has_coremltools() -> bool:
+    if platform.system() != "Darwin":
+        return False
+    try:
+        import coremltools  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def resolve_onnx_execution(
+    requested_device: str = "auto",
+) -> Tuple[str, List[str]]:
+    """
+    Resolve the effective ONNX Runtime backend and provider chain.
+
+    Fallback order:
+      auto -> CUDA -> CPU
+      coreml -> explicit opt-in only
+    """
+    import onnxruntime as ort
+
+    available = set(ort.get_available_providers())
+    requested = requested_device.lower().strip()
+
+    if requested in ("auto", "cuda") and "CUDAExecutionProvider" in available:
+        return "cuda", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    if requested in ("coreml", "mac", "mps") and "CoreMLExecutionProvider" in available:
+        return "coreml", ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    return "cpu", ["CPUExecutionProvider"]
+
+
+def resolve_validation_execution(
+    requested_device: str = "auto",
+    yolo_model_path: Optional[str] = None,
+) -> Tuple[Tuple[str, List[str]], Tuple[str, List[str]]]:
+    """
+    Resolve per-model execution backends for validation.
+
+    Policy:
+      auto on CUDA-capable systems -> YOLO cuda, CTR-GCN cuda
+      auto on macOS with CoreML YOLO model -> YOLO direct-coreml, CTR-GCN coreml (if available)
+      auto on macOS without CoreML YOLO model -> YOLO cpu, CTR-GCN coreml (if available)
+      auto otherwise -> YOLO cpu, CTR-GCN cpu
+
+    Explicit requests still force both models to the same backend family.
+    """
+    import onnxruntime as ort
+
+    available = set(ort.get_available_providers())
+    requested = requested_device.lower().strip()
+    has_direct_coreml_yolo = _has_coremltools() and _is_coreml_model_path(yolo_model_path)
+
+    if requested in ("auto", "cuda") and "CUDAExecutionProvider" in available:
+        cuda = ("cuda", ["CUDAExecutionProvider", "CPUExecutionProvider"])
+        return cuda, cuda
+
+    if requested == "auto" and platform.system() == "Darwin":
+        yolo = ("coreml_direct", ["CoreMLDirect"]) if has_direct_coreml_yolo else ("cpu", ["CPUExecutionProvider"])
+        if "CoreMLExecutionProvider" in available:
+            ctr = ("coreml", ["CoreMLExecutionProvider", "CPUExecutionProvider"])
+        else:
+            ctr = ("cpu", ["CPUExecutionProvider"])
+        return yolo, ctr
+
+    if requested in ("coreml", "mac", "mps") and "CoreMLExecutionProvider" in available:
+        if has_direct_coreml_yolo:
+            yolo = ("coreml_direct", ["CoreMLDirect"])
+        else:
+            yolo = ("coreml", ["CoreMLExecutionProvider", "CPUExecutionProvider"])
+        coreml = ("coreml", ["CoreMLExecutionProvider", "CPUExecutionProvider"])
+        return yolo, coreml
+
+    cpu = ("cpu", ["CPUExecutionProvider"])
+    return cpu, cpu
+
+
+def _onnx_provider_candidates(
+    requested_device: str = "auto",
+) -> List[Tuple[str, List[str]]]:
+    import onnxruntime as ort
+
+    available = set(ort.get_available_providers())
+    requested = requested_device.lower().strip()
+    candidates: List[Tuple[str, List[str]]] = []
+
+    if requested in ("auto", "cuda") and "CUDAExecutionProvider" in available:
+        candidates.append(("cuda", ["CUDAExecutionProvider", "CPUExecutionProvider"]))
+    if requested in ("coreml", "mac", "mps") and "CoreMLExecutionProvider" in available:
+        candidates.append(("coreml", ["CoreMLExecutionProvider", "CPUExecutionProvider"]))
+    if not candidates or requested == "cpu":
+        candidates.append(("cpu", ["CPUExecutionProvider"]))
+    elif candidates[-1][0] != "cpu":
+        candidates.append(("cpu", ["CPUExecutionProvider"]))
+    return candidates
+
+
+def create_onnx_session(
+    model_path: str,
+    requested_device: str = "auto",
+    log: Optional[Callable[[str], None]] = None,
+) -> Tuple[object, str, List[str]]:
+    """Create an ONNX session with provider fallback."""
+    import onnxruntime as ort
+
+    errors: List[str] = []
+    for backend, providers in _onnx_provider_candidates(requested_device):
+        try:
+            session = ort.InferenceSession(model_path, providers=providers)
+            return session, backend, providers
+        except Exception as exc:
+            errors.append(f"{backend}: {exc}")
+            if log is not None:
+                log(
+                    f"[Validate] Provider init failed for {Path(model_path).name} "
+                    f"on {backend}; trying next fallback."
+                )
+
+    raise RuntimeError(
+        f"Could not initialize ONNX session for {Path(model_path).name}. "
+        f"Tried: {' | '.join(errors)}"
+    )
 
 
 # ===================================================================
@@ -131,8 +266,10 @@ def _yolo_postprocess(
 
     Parameters
     ----------
-    raw : (1, 56, N_anchors) float32
-        Direct output of the ONNX session.
+    raw
+        Direct output of the ONNX session. Supports two layouts:
+          1. Legacy anchor-style export: (1, 56, N) or (1, N, 56)
+          2. End-to-end NMS export:      (1, N, 6 + 17*3)
     ratio, pad_top, pad_left
         Letterbox parameters from _letterbox().
 
@@ -140,6 +277,24 @@ def _yolo_postprocess(
     -------
     List of (17, 3) float32 arrays [x_orig, y_orig, conf] in original image coords.
     """
+    # Newer Ultralytics ONNX exports can include post-NMS detections directly:
+    # [x1, y1, x2, y2, score, class_id, kpts...]. In this case coordinates remain
+    # in letterboxed image space and only need to be scaled back to the original frame.
+    if raw.ndim == 3 and raw.shape[0] == 1 and raw.shape[2] >= 6:
+        det_dim = raw.shape[2]
+        kpt_values = det_dim - 6
+        if kpt_values > 0 and kpt_values % 3 == 0:
+            num_kpts = kpt_values // 3
+            pred = raw[0]
+            pred = pred[pred[:, 4] > conf_thr]
+            detections: List[np.ndarray] = []
+            for det in pred:
+                kpts = det[6:].reshape(num_kpts, 3).copy()
+                kpts[:, 0] = (kpts[:, 0] - pad_left) / ratio
+                kpts[:, 1] = (kpts[:, 1] - pad_top) / ratio
+                detections.append(kpts.astype(np.float32))
+            return detections
+
     # Support both (1, 56, N) and (1, N, 56)
     if raw.ndim == 3 and raw.shape[1] == 56:
         pred = raw[0].T          # (N, 56)
@@ -171,10 +326,20 @@ def _yolo_postprocess(
 class YoloPoseONNX:
     """ONNX-Runtime wrapper for a YOLOv8-pose model."""
 
-    def __init__(self, model_path: str, imgsz: int = 640) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        imgsz: int = 640,
+        providers: Optional[List[str]] = None,
+        session=None,
+    ) -> None:
         import onnxruntime as ort
-        providers = ["CPUExecutionProvider"]
-        self._session = ort.InferenceSession(model_path, providers=providers)
+        if session is not None:
+            self._session = session
+        else:
+            if providers is None:
+                providers = ["CPUExecutionProvider"]
+            self._session = ort.InferenceSession(model_path, providers=providers)
         self._input_name = self._session.get_inputs()[0].name
         self._imgsz = imgsz
 
@@ -190,6 +355,28 @@ class YoloPoseONNX:
             / 255.0
         )
         raw = self._session.run(None, {self._input_name: inp})[0]
+        return _yolo_postprocess(raw, ratio, pad_top, pad_left, conf_thr)
+
+
+class YoloPoseCoreML:
+    """Direct CoreML wrapper for a YOLO pose .mlpackage/.mlmodel export."""
+
+    def __init__(self, model_path: str, imgsz: int = 640) -> None:
+        import coremltools as ct
+
+        self._model = ct.models.MLModel(model_path)
+        self._input_name = self._model.get_spec().description.input[0].name
+        self._imgsz = imgsz
+
+    def predict_frame(
+        self, frame: np.ndarray, conf_thr: float = 0.05
+    ) -> List[np.ndarray]:
+        from PIL import Image
+
+        img, ratio, pad_top, pad_left = _letterbox(frame, self._imgsz)
+        pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        output = self._model.predict({self._input_name: pil})
+        raw = np.asarray(next(iter(output.values())), dtype=np.float32)
         return _yolo_postprocess(raw, ratio, pad_top, pad_left, conf_thr)
 
 
@@ -281,7 +468,7 @@ def _pick_single_person(
 # ===================================================================
 def extract_poses(
     video_path: str,
-    yolo_model: YoloPoseONNX,
+    yolo_model,
     batch_size: int = 8,   # unused in ONNX path; kept for interface compatibility
     conf_thr: float = 0.05,
     device: Optional[str] = None,
@@ -531,21 +718,31 @@ def validate_videos(
     log / progress / stop_requested
         Callbacks for UI integration.
     """
-    import onnxruntime as ort
-
-    providers = (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if config.device == "cuda"
-        else ["CPUExecutionProvider"]
+    (requested_yolo_backend, requested_yolo_providers), (
+        requested_ctr_backend,
+        requested_ctr_providers,
+    ) = resolve_validation_execution(config.device, config.yolo_model_path)
+    log(
+        "[Validate] ONNX backend preference: "
+        f"YOLO={requested_yolo_backend} ({', '.join(requested_yolo_providers)}), "
+        f"CTR-GCN={requested_ctr_backend} ({', '.join(requested_ctr_providers)})"
     )
-
     log("[Validate] Loading YOLO model...")
-    yolo_model = YoloPoseONNX(config.yolo_model_path)
+    if requested_yolo_backend == "coreml_direct":
+        yolo_model = YoloPoseCoreML(config.yolo_model_path)
+        yolo_backend, yolo_providers = "coreml_direct", ["CoreMLDirect"]
+    else:
+        yolo_session, yolo_backend, yolo_providers = create_onnx_session(
+            config.yolo_model_path, requested_yolo_backend, log,
+        )
+        yolo_model = YoloPoseONNX(config.yolo_model_path, session=yolo_session)
+    log(f"[Validate] YOLO backend: {yolo_backend} ({', '.join(yolo_providers)})")
 
     log("[Validate] Loading CTR-GCN model...")
-    ctr_gcn_session = ort.InferenceSession(
-        config.ctr_gcn_checkpoint_path, providers=providers
+    ctr_gcn_session, ctr_backend, ctr_providers = create_onnx_session(
+        config.ctr_gcn_checkpoint_path, requested_ctr_backend, log,
     )
+    log(f"[Validate] CTR-GCN backend: {ctr_backend} ({', '.join(ctr_providers)})")
 
     results: List[ValidationResult] = []
     total = len(video_entries)
