@@ -1,14 +1,16 @@
 # SlopeSense - Client User Guide
 
 ## 1. What This App Does
-SlopeSense matches GoPro videos to MATLAB tipper files and creates renamed video outputs based on the matched tipper filenames.
+SlopeSense supports two related workflows:
 
-The app also supports Human-in-the-Loop (HITL) decisions when:
-- video direction cannot be auto-detected,
-- tipper angle/result needs manual review,
-- video and tipper directions conflict.
+1. `Run`: matches GoPro videos to MATLAB tipper files, applies any needed human review, and creates renamed video outputs.
+2. `Validate`: runs the integrated computer-vision inference pipeline on videos and compares model predictions against the tipper label in the filename.
 
-At the end of each run, the app writes run reports to your selected reports folder.
+The validation pipeline classifies each video as `Pass` or `Fail` using:
+- YOLO pose extraction
+- CTR-GCN classification
+
+At the end of each run, the app writes reports to your selected `Reports directory`.
 
 ## 2. Before You Start
 Make sure your data is organized by date folders.
@@ -43,104 +45,161 @@ Supported tipper filename formats include:
 
 If angle is missing, the app reads it from MATLAB data and injects it into the filename as needed.
 
+For validation to work, the packaged app must include these model files:
+- `models/classifier.onnx`
+- `models/yolo26x-pose.onnx`
+
 ## 3. Main Screen Overview
-The **Run** tab contains:
+The app has two tabs:
+
+### Run Tab
+This is the main working screen. It contains:
 - `Videos directory`: source videos root
 - `Tipper directory`: source tipper root
 - `Output directory`: where renamed videos are copied
 - `Write log to file`: optional toggle
-- `Log file path`: auto-managed path (inside Reports directory)
+- `Log file path`: auto-managed path inside the Reports directory
 - `Reports directory`: where CSV/XLSX reports are saved
-- `Dry run`: simulate actions without copying/renaming files
-- `Run` and `Cancel` buttons
+- `Dry run`: preview mode with no actual copy or rename operations
+- `Run` button: starts video-to-tipper matching and renaming
+- `Validate` button: runs CV inference on videos
+- `Cancel` button: cancels an active run or validation job
 - Progress panel and progress bar
 
-The **Tipper Preview** tab shows current date tipper rows and live status updates:
-- `Pending`, `Current`, `Matched`, `Skipped`, `Corrected`, `Unmatched`
+### Tipper Preview Tab
+Shows the current date's tipper rows and live status updates:
+- `Pending`
+- `Current`
+- `Matched`
+- `Skipped`
+- `Corrected`
+- `Unmatched`
 
-## 4. How To Run (Step-by-Step)
+## 4. Recommended User Flow
+The current app is best used in this order:
+
+1. Set all folder paths.
+2. Run a `Dry run` first.
+3. Review the renaming reports and any corrections.
+4. Run again with `Dry run` off if the preview looks correct.
+5. After the renaming run completes, click `Validate`.
+6. Review the validation Excel report in the Reports directory.
+
+You can also click `Validate` without doing a renaming run in the current session. In that case, the app scans the `Videos directory` directly and validates all supported video files it finds.
+
+## 5. How To Run The Renaming Workflow
 1. Open the app.
 2. Set `Videos directory`.
 3. Set `Tipper directory`.
 4. Set `Output directory`.
 5. Set `Reports directory`.
 6. Optional: enable `Write log to file`.
-7. Optional: enable `Dry run` for a simulation pass.
+7. Optional: enable `Dry run`.
 8. Click `Run`.
 9. Respond to any HITL dialogs during processing.
 10. Wait for the completion popup.
 11. Review outputs in:
-- Output folder (or simulated actions if dry run),
-- Reports folder (`run.log`, `tipper_corrections.csv`, `failed_folders.csv`, `video_mappings.xlsx`, `MAA/`).
+- Output folder, if `Dry run` was off
+- Reports folder
 
-## 5. HITL Dialogs 
+When a renaming run finishes successfully, the app may tell you how many videos are available for validation and prompt you to click `Validate`.
+
+## 6. How To Run Validation
+Validation runs the inference pipeline on videos and produces a separate Excel report.
+
+### Validation After A Renaming Run
+If you click `Validate` immediately after a run, the app validates the renamed video outputs from that session.
+
+### Validation Without A Prior Run
+If you click `Validate` without first running the renaming workflow in the current session, the app scans the `Videos directory` directly and validates all supported video files it finds.
+
+Supported video extensions for validation include:
+- `.mp4`
+- `.mov`
+- `.m4v`
+- `.avi`
+- `.mkv`
+
+### What Validation Does
+For each video, the app:
+- extracts poses with YOLO
+- preprocesses the skeleton sequence
+- classifies the video as `Pass` or `Fail` using CTR-GCN
+- compares the model prediction to the tipper label encoded in the renamed filename when available
+
+Validation does not rename files or edit tipper files.
+
+## 7. HITL Dialogs
 ### A) Direction Needed
 Appears when video direction is undecided.
 
 You will see:
-- video name,
-- thumbnail preview,
-- `Open in Player` button.
+- video name
+- thumbnail preview
+- `Open in Player` button
 
 Actions:
-- `Down (D)`: force video direction to D and continue.
-- `Up (U)`: force video direction to U and continue.
-- `Skip`: skip this video.
-- `Abort Run` or closing dialog: aborts the run.
+- `Down (D)`: force video direction to `D` and continue
+- `Up (U)`: force video direction to `U` and continue
+- `Skip`: skip this video
+- `Abort Run` or closing the dialog: aborts the run
 
 ### B) Tipper Angle Review
-Appears when tipper angle is 0 and result is undecided (`U`).
+Appears when tipper angle is `0` and result is undecided (`U`).
 
 Actions:
-- `Keep Undecided (U)`: keep as U.
-- `Mark Pass (P)`: update result to P.
-- `Mark Fail (F)`: update result to F.
-- `Delete/Skip`: remove this tipper from matching sequence.
-- `Abort Run` or closing dialog: aborts the run.
+- `Keep Undecided (U)`
+- `Mark Pass (P)`
+- `Mark Fail (F)`
+- `Delete/Skip`
+- `Abort Run` or closing the dialog: aborts the run
 
 ### C) Direction Conflict
 Appears when a video direction and current tipper direction do not match.
 
-You can choose correction direction from dropdowns and apply:
-- `Fix Video Direction`: changes video direction in-memory for matching.
-- `Fix Tipper Direction`: updates tipper direction (and name if not dry run), then accepts match.
-- `Skip Video`: skip this video entry.
-- `Skip Tipper`: skip this tipper entry.
-- `Abort Run` or closing dialog: aborts the run.
+Actions:
+- `Fix Video Direction`: changes the video direction in memory for matching
+- `Fix Tipper Direction`: updates the tipper direction and, if not in dry run, applies the tipper rename
+- `Skip Video`
+- `Skip Tipper`
+- `Abort Run` or closing the dialog: aborts the run
 
-## 6. Dry Run vs Normal Run
+## 8. Dry Run vs Normal Run
 ### Dry Run ON
-- No actual copy/rename file operations.
-- App logs and reports what would happen.
-- Useful for validation before committing changes.
+- No actual copy or rename operations
+- Reports and logs still show what would happen
+- Best for a first pass
 
 ### Dry Run OFF
-- Videos are copied to output with matched renamed filenames.
-- Tipper corrections that require renames are applied.
+- Videos are copied to the output folder with matched renamed filenames
+- Tipper corrections that require renaming are applied
 
-## 7. Reports Explained
+## 9. Reports Explained
 All reports are written to your selected `Reports directory`.
 
-### 1) `run.log` (optional, if enabled)
-Detailed runtime logs and warnings.
+### Renaming Reports
+`run.log`
+- Optional
+- Written only if `Write log to file` is enabled
 
-### 2) `tipper_corrections.csv`
-Tracks tipper file corrections:
-- `date`, `sub`, `original_name`, `new_name`, `reason`
+`tipper_corrections.csv`
+- Tracks tipper file corrections
+- Columns: `date`, `sub`, `original_name`, `new_name`, `reason`
 
-### 3) `failed_folders.csv`
-Folders/date-sub entries that failed or were skipped:
-- `folder`
+`failed_folders.csv`
+- Folders/date-sub entries that failed or were skipped
+- Column: `folder`
 
-### 4) `video_mappings.xlsx`
-Per matched mapping details:
+`video_mappings.xlsx`
+- One row per matched video/tipper mapping
+- Includes:
 - `tipper_filename`
 - `date`
 - `time`
 - `sub`
 - `shoe`
 - `Trial Number`
-- `Angle` (stored as integer, half-up rounding)
+- `Angle`
 - `Ice Temperature degC`
 - `Air Humidity RH`
 - `Air Temperature degC`
@@ -150,67 +209,88 @@ Per matched mapping details:
 - `renamed_video`
 - `dry_run`
 
-### 5) `MAA/`
-MAA means Maximum Achievable Angle.
+`MAA/`
+- One workbook per participant per date
+- Path format: `Reports directory/MAA/<date>/<sub>.xlsx`
+- Each shoe gets its own worksheet
+- Includes uphill/downhill MAA summaries, angle counts, and trial details
 
-Location:
-- `run_reports/MAA/<date>/<sub>.xlsx`
+### Validation Report
+`validation_results_YYYYMMDD_HHMMSS.xlsx`
+- Written each time validation is run
+- Contains one row per validated video
+- Includes:
+- `Original Video`
+- `Renamed Video`
+- `Tipper Classification`
+- `Model Classification`
+- `Model Confidence`
+- `Match`
+- `Error`
 
-Structure:
-- one workbook per participant per date,
-- one sheet per shoe.
+The validation sheet also includes a summary with:
+- total videos
+- number of matches
+- agreement rate
+- number of errors
 
-Each shoe sheet contains:
-- `Uphill MAA`
-- `Downhill MAA`
-- an angle summary table with pass/fail counts,
-- a detailed trial table using `Trial Number`, `Angle`, `Direction`, `Result`, and `Tipper Filename`.
+## 10. Completion and Cancellation
+### Renaming Completion Popup
+The completion popup reports:
+- whether processing completed or was cancelled
+- skipped folder count
+- unmatched video/tipper counts
+- reports directory
+- whether videos are available for validation
 
-If there is not enough data to determine MAA, the sheet shows:
-- `Insufficient data`
-
-## 8. Completion and Cancellation
-### Completion Popup
-At end of run, app shows summary:
-- completed vs cancelled,
-- skipped folder count,
-- unmatched counts,
-- report directory.
+### Validation Completion Popup
+The validation popup reports:
+- total number of classified videos
+- agreement with tipper labels, when comparable labels exist
+- error count
 
 ### Cancel Button
-`Cancel` requests a safe stop. It may take time if current video analysis step is still running.
+`Cancel` requests a safe stop for either:
+- a renaming run
+- a validation run
 
 ### Important
-Closing/aborting any HITL dialog aborts the full run by design.
+Closing or cancelling any HITL dialog aborts the renaming run.
 
-## 9. Common Problems and What To Check
-### No files processed
-- Verify `Videos directory` and `Tipper directory` are correct.
-- Confirm both use matching date folder names.
+## 11. Common Problems and What To Check
+### No Files Processed During Run
+- Verify `Videos directory` and `Tipper directory`
+- Confirm both use matching date folder names
 
-### Many unmatched files
-- Check date/sub folder alignment.
-- Review `Tipper Preview` statuses for where mismatches started.
+### Validation Says Model Files Are Missing
+- Confirm the packaged app includes:
+- `models/classifier.onnx`
+- `models/yolo26x-pose.onnx`
 
-### Missing outputs
-- If `Dry run` was ON, this is expected (simulation only).
-- If OFF, check `run.log` for copy/rename warnings.
+### No Videos Found To Validate
+- Check that the `Videos directory` is set correctly
+- If validating after a run, confirm the run produced mapped video outputs
 
-### Aborted run
-- Check if any HITL dialog was closed.
-- Review `failed_folders.csv` and `run.log`.
+### Many Unmatched Files
+- Check date/sub alignment
+- Review the `Tipper Preview` tab to see where matching diverged
 
-## 10. Recommended Operational Workflow
-1. First pass: run with `Dry run` ON.
-2. Review `video_mappings.xlsx` and `tipper_corrections.csv`.
-3. Resolve any data layout issues.
-4. Second pass: run with `Dry run` OFF.
-5. Archive reports with the delivered output set.
+### Missing Outputs
+- If `Dry run` was on, no copied or renamed files are expected
+- Otherwise, review `run.log` and the reports folder
 
-## 11. Quick Reference Checklist
-- Set all four directories.
-- Decide dry run ON/OFF.
-- Click Run.
-- Respond to HITL dialogs.
-- Wait for completion popup.
-- Review reports.
+### Aborted Run
+- Check whether a HITL dialog was closed
+- Review `failed_folders.csv` and `run.log`
+
+## 12. Quick Reference Checklist
+- Set `Videos directory`
+- Set `Tipper directory`
+- Set `Output directory`
+- Set `Reports directory`
+- Decide whether to use `Dry run`
+- Click `Run`
+- Respond to HITL dialogs if prompted
+- Review renaming reports
+- Click `Validate`
+- Review `validation_results_YYYYMMDD_HHMMSS.xlsx`
