@@ -4,6 +4,17 @@ run_reports
 .claude
 models/
 
+# Local Windows build tooling for RenamingApp
+.venv-build/
+.python311/
+.installers/
+*.nupkg
+*.zip.tmp
+python-3.11*.exe
+python-*.zip
+SlopeSense/
+SlopeSense.exe
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
