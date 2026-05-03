@@ -10,6 +10,11 @@ The validation pipeline classifies each video as `Pass` or `Fail` using:
 - YOLO pose extraction
 - CTR-GCN classification
 
+Before either workflow processes videos, the app checks the selected `Videos directory`.
+If any videos are larger than 360p, it creates a sibling folder named `<Videos directory>_360p`,
+copies the same video tree into it, converts larger videos to 360p, and uses that folder for
+renaming/direction detection and validation.
+
 At the end of each run, the app writes reports to your selected `Reports directory`.
 
 ## 2. Before You Start
@@ -66,6 +71,9 @@ This is the main working screen. It contains:
 - `Cancel` button: cancels an active run or validation job
 - Progress panel and progress bar
 
+If the selected videos are not already 360p, the progress panel will show where the generated
+`_360p` video folder is saved.
+
 ### Tipper Preview Tab
 Shows the current date's tipper rows and live status updates:
 - `Pending`
@@ -112,6 +120,7 @@ If you click `Validate` immediately after a run, the app validates the renamed v
 
 ### Validation Without A Prior Run
 If you click `Validate` without first running the renaming workflow in the current session, the app scans the `Videos directory` directly and validates all supported video files it finds.
+The same 360p check runs first, so validation uses the generated `_360p` copy when needed.
 
 Supported video extensions for validation include:
 - `.mp4`
@@ -169,6 +178,8 @@ Actions:
 - No actual copy or rename operations
 - Reports and logs still show what would happen
 - Best for a first pass
+- The automatic `_360p` video preparation may still create or update the generated 360p copy,
+  because direction detection needs to run on the normalized videos.
 
 ### Dry Run OFF
 - Videos are copied to the output folder with matched renamed filenames

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import traceback
+from dataclasses import replace
 from concurrent.futures import Future, TimeoutError
 from pathlib import Path
 import sys
@@ -48,6 +49,12 @@ from RenamingApp.core.validation import (
     validate_videos,
     write_validation_report,
 )
+from RenamingApp.core.video_normalization import (
+    VIDEO_EXTS,
+    conversion_dir_for,
+    iter_video_files,
+    normalize_video_directory,
+)
 from RenamingApp.ui.dialogs import AngleDecisionDialog, ConflictDialog, DirectionDialog
 from RenamingApp.ui.progress import LogPanel
 from RenamingApp.ui.tipper_table import TipperTableModel
@@ -74,6 +81,7 @@ class ProcessingWorker(QObject):
 
     def __init__(self, config: RunConfig, report_dir: Path):
         super().__init__()
+        self.original_config = config
         self.config = config
         self.cancel_event = Event()
         self._progress_value = 0
@@ -87,6 +95,18 @@ class ProcessingWorker(QObject):
     def process(self) -> None:
         summary = ProcessSummary([], 0, 0)
         try:
+            self.log.emit("[360p] Preparing videos before renaming...")
+            normalized_videos_dir = normalize_video_directory(
+                self.config.videos_dir,
+                log=self._log,
+                stop_requested=self.cancel_event.is_set,
+                progress_range=self.progress_range.emit,
+                progress_update=self.progress.emit,
+            )
+            if normalized_videos_dir != self.config.videos_dir:
+                self.config = replace(self.config, videos_dir=normalized_videos_dir)
+                self.log.emit(f"[360p] Renaming will use: {normalized_videos_dir}")
+
             total = count_videos(self.config.videos_dir)
             self.progress_range.emit(max(1, total))
             callbacks = HitlCallbacks(
@@ -178,11 +198,13 @@ class ValidationWorker(QObject):
         video_entries: List[tuple],
         config: "ValidationConfig",
         report_dir: Path,
+        normalization_source_dir: Optional[Path] = None,
     ):
         super().__init__()
         self.video_entries = video_entries
         self.config = config
         self.report_dir = report_dir
+        self.normalization_source_dir = normalization_source_dir
         self.cancel_event = Event()
 
     def cancel(self) -> None:
@@ -191,6 +213,24 @@ class ValidationWorker(QObject):
     @Slot()
     def process(self) -> None:
         try:
+            if self.normalization_source_dir is not None:
+                self._log("[360p] Preparing videos before validation...")
+                scan_dir = normalize_video_directory(
+                    self.normalization_source_dir,
+                    log=self._log,
+                    stop_requested=self.cancel_event.is_set,
+                    progress_range=self.progress_range.emit,
+                    progress_update=self.progress.emit,
+                )
+                if scan_dir != self.normalization_source_dir:
+                    self._log(f"[360p] Validation will use: {scan_dir}")
+                self.video_entries = [
+                    (path.name, path.name, str(path))
+                    for path in iter_video_files(scan_dir, VIDEO_EXTS)
+                ]
+                if not self.video_entries:
+                    raise RuntimeError("No video files found to validate.")
+
             self.progress_range.emit(max(1, len(self.video_entries)))
             results = validate_videos(
                 self.video_entries,
@@ -204,7 +244,10 @@ class ValidationWorker(QObject):
             output_path = self.report_dir / f"validation_results_{ts}.xlsx"
             write_validation_report(results, output_path)
             self._log(f"[Validate] Report written to: {output_path}")
-            self.finished.emit(results)
+            self.finished.emit((results, output_path))
+        except ProcessingCancelled as exc:
+            self._log(str(exc))
+            self.finished.emit(([], None))
         except Exception:
             self.error.emit(traceback.format_exc())
 
@@ -228,6 +271,7 @@ class MainWindow(QMainWindow):
         self._active_hitl_dialogs: List[QDialog] = []
         self._last_mappings: List[MappingEntry] = []
         self._last_run_config: Optional[RunConfig] = None
+        self._last_run_input_config: Optional[RunConfig] = None
         self._val_worker: Optional[ValidationWorker] = None
         self._val_thread: Optional[QThread] = None
         self._build_ui()
@@ -773,6 +817,32 @@ class MainWindow(QMainWindow):
             self._show_error("Output directory must be different from Videos and Tipper directories.")
             return False
 
+        normalized_videos_dir = conversion_dir_for(videos_dir)
+        if normalized_videos_dir != videos_dir:
+            if (
+                normalized_videos_dir == tippers_dir
+                or self._is_within(tippers_dir, normalized_videos_dir)
+                or self._is_within(normalized_videos_dir, tippers_dir)
+            ):
+                self._show_error(
+                    f"Tipper directory must be different from the automatic 360p videos directory: {normalized_videos_dir}"
+                )
+                return False
+            if (
+                output_dir == normalized_videos_dir
+                or self._is_within(output_dir, normalized_videos_dir)
+                or self._is_within(normalized_videos_dir, output_dir)
+            ):
+                self._show_error(
+                    f"Output directory cannot overlap the automatic 360p videos directory: {normalized_videos_dir}"
+                )
+                return False
+            if report_dir == normalized_videos_dir or self._is_within(report_dir, normalized_videos_dir):
+                self._show_error(
+                    f"Reports directory cannot be inside the automatic 360p videos directory: {normalized_videos_dir}"
+                )
+                return False
+
         if self._is_within(output_dir, videos_dir) or self._is_within(videos_dir, output_dir):
             self._show_error("Output directory cannot be inside Videos directory (or vice versa).")
             return False
@@ -823,6 +893,25 @@ class MainWindow(QMainWindow):
         )
         return config, report_dir, log_file
 
+    def _last_run_matches_current_selection(self) -> bool:
+        if self._last_run_input_config is None:
+            return False
+
+        try:
+            current_videos = Path(self.videos_edit.text().strip()).expanduser().resolve(strict=False)
+            current_tippers = Path(self.tippers_edit.text().strip()).expanduser().resolve(strict=False)
+            current_output = Path(self.output_edit.text().strip()).expanduser().resolve(strict=False)
+        except Exception:
+            return False
+
+        last = self._last_run_input_config
+        return (
+            current_videos == last.videos_dir
+            and current_tippers == last.tippers_dir
+            and current_output == last.dest_dir
+            and self.dry_run_checkbox.isChecked() == last.dry_run
+        )
+
     def _initialize_log_file(self, log_file: Optional[Path]) -> bool:
         self._log_file_path = None
         if log_file is None:
@@ -870,6 +959,7 @@ class MainWindow(QMainWindow):
         self._cancel_requested = False
         self._current_report_dir = report_dir
         self._last_run_config = config
+        self._last_run_input_config = config
         self._last_mappings = []
 
         self.worker = ProcessingWorker(config, report_dir=report_dir)
@@ -1089,6 +1179,8 @@ class MainWindow(QMainWindow):
         # Save mappings for validation
         if self.worker and self.worker.reporter:
             self._last_mappings = list(self.worker.reporter.mappings)
+            self._last_run_config = self.worker.config
+            self._last_run_input_config = self.worker.original_config
         self._close_active_hitl_dialogs()
         self._cleanup_worker_thread()
         self._set_ui_running_state(False)
@@ -1120,7 +1212,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
-    _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
 
     def _start_validation(self) -> None:
         try:
@@ -1160,15 +1251,21 @@ class MainWindow(QMainWindow):
             self._show_error(f"CTR-GCN model file not found: {ckpt_abs}")
             return
 
-        report_dir = self._current_report_dir
+        report_dir = self._resolve_output_dir(self.report_dir_edit.text(), "Reports directory")
         if report_dir is None:
-            report_dir = self._resolve_output_dir(self.report_dir_edit.text(), "Reports directory")
-            if report_dir is None:
-                return
+            return
+        self._current_report_dir = report_dir
 
         video_entries: List[tuple] = []
+        normalization_source_dir: Optional[Path] = None
+        validation_video_count = 0
+        use_last_run_mappings = (
+            bool(self._last_mappings)
+            and self._last_run_config is not None
+            and self._last_run_matches_current_selection()
+        )
 
-        if self._last_mappings and self._last_run_config:
+        if use_last_run_mappings:
             # Build from renaming-run mappings (preferred: we know original vs renamed)
             run_cfg = self._last_run_config
             for m in self._last_mappings:
@@ -1183,7 +1280,12 @@ class MainWindow(QMainWindow):
                     self.log_panel.append_line(
                         f"[Validate] Skipping {m.renamed_video}: file not found at {video_file}"
                     )
+            validation_video_count = len(video_entries)
         else:
+            if self._last_mappings and self._last_run_config:
+                self.log_panel.append_line(
+                    "[Validate] Folder settings changed since the last run; scanning the selected Videos directory."
+                )
             # No renaming run this session -- scan the Videos input directory directly
             videos_text = self.videos_edit.text().strip()
             if not videos_text:
@@ -1193,11 +1295,29 @@ class MainWindow(QMainWindow):
             if not scan_dir.is_dir():
                 self._show_error(f"Videos directory not found: {scan_dir}")
                 return
-            for f in sorted(scan_dir.rglob("*")):
-                if f.suffix.lower() in self._VIDEO_EXTS:
-                    video_entries.append((f.name, f.name, str(f)))
+            if report_dir == scan_dir or self._is_within(report_dir, scan_dir):
+                self._show_error("Reports directory cannot be inside Videos directory.")
+                return
+            try:
+                source_videos = iter_video_files(scan_dir, VIDEO_EXTS)
+            except Exception as exc:
+                self._show_error(str(exc))
+                return
+            if not source_videos:
+                self._show_error("No video files found to validate.")
+                return
+            normalized_scan_dir = conversion_dir_for(scan_dir)
+            if normalized_scan_dir != scan_dir and (
+                report_dir == normalized_scan_dir or self._is_within(report_dir, normalized_scan_dir)
+            ):
+                self._show_error(
+                    f"Reports directory cannot be inside the automatic 360p videos directory: {normalized_scan_dir}"
+                )
+                return
+            normalization_source_dir = scan_dir
+            validation_video_count = len(source_videos)
 
-        if not video_entries:
+        if not video_entries and normalization_source_dir is None:
             self._show_error("No video files found to validate.")
             return
 
@@ -1212,7 +1332,7 @@ class MainWindow(QMainWindow):
         )
 
         self.log_panel.append_line(
-            f"[Validate] Starting validation on {len(video_entries)} videos "
+            f"[Validate] Starting validation on {validation_video_count} videos "
             f"(preferred backends: YOLO={yolo_backend} ({', '.join(yolo_providers)}), "
             f"CTR-GCN={ctr_backend} ({', '.join(ctr_providers)}))..."
         )
@@ -1220,7 +1340,12 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self._cancel_requested = False
 
-        self._val_worker = ValidationWorker(video_entries, config, report_dir)
+        self._val_worker = ValidationWorker(
+            video_entries,
+            config,
+            report_dir,
+            normalization_source_dir=normalization_source_dir,
+        )
         self._val_thread = QThread(self)
         self._val_worker.moveToThread(self._val_thread)
 
@@ -1248,7 +1373,13 @@ class MainWindow(QMainWindow):
         self._cleanup_val_thread()
         self._set_ui_running_state(False)
 
-        results = results_obj if isinstance(results_obj, list) else []
+        report_path: Optional[Path] = None
+        if isinstance(results_obj, tuple) and len(results_obj) == 2:
+            raw_results, raw_report_path = results_obj
+            results = raw_results if isinstance(raw_results, list) else []
+            report_path = raw_report_path if isinstance(raw_report_path, Path) else None
+        else:
+            results = results_obj if isinstance(results_obj, list) else []
         total = len(results)
         errors = sum(1 for r in results if r.error)
         comparable = total - errors
@@ -1260,8 +1391,8 @@ class MainWindow(QMainWindow):
             msg_lines.append(f"Agreement with tipper labels: {matches}/{comparable} ({matches / comparable:.0%})")
         if errors:
             msg_lines.append(f"Errors: {errors}")
-        if self._current_report_dir:
-            msg_lines.append(f"Results saved to: {self._current_report_dir / 'validation_results.xlsx'}")
+        if report_path:
+            msg_lines.append(f"Results saved to: {report_path}")
 
         self._show_message_box(QMessageBox.Information, "Validation Complete", "\n".join(msg_lines))
 
