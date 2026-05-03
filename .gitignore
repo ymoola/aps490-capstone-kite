@@ -1,9 +1,21 @@
-CV/
-best_model.pt*
-run_reports
-.claude
+# OS / editor noise
 .DS_Store
-models/
+Thumbs.db
+.vscode/
+.idea/
+.claude/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
 
 # Python environments and local build tooling
 .env
