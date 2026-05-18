@@ -12,21 +12,16 @@ __pycache__/
 # C extensions
 *.so
 
-CTR-GCN/out/
-CTR-GCN/models/
-
-CTR-GCN/out_openpose
-CTR-GCN/splits/
-CTR-GCN/frameworks/openpose/
-CTR-GCN/frameworks/mmaction2/
-
-CTR-GCN/outputs/
-CTR-GCN/outputs/
-CTR-GCN/runs/
-CTR-GCN/debugging/
-
-# Production model output (tracked intentionally)
-!CTR-GCN/production/
+# Kite CV slip detector - data/artifacts (kept locally, not tracked)
+kite-computer-vision-slip-detector/outputs/
+kite-computer-vision-slip-detector/runs/
+kite-computer-vision-slip-detector/data/
+kite-computer-vision-slip-detector/production/
+kite-computer-vision-slip-detector/models/
+kite-computer-vision-slip-detector/debugging/
+kite-computer-vision-slip-detector/frameworks/openpose/
+kite-computer-vision-slip-detector/frameworks/mmaction2/
+kite-computer-vision-slip-detector/.slopesense/
 
 
 # Distribution / packaging
