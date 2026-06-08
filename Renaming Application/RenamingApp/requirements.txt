@@ -5,6 +5,8 @@ opencv-python
 scipy
 numpy<2.0
 openpyxl
+pillow
+coremltools==9.0; sys_platform == "darwin"
 # Validation (CV model) dependencies
 torch
 ultralytics
