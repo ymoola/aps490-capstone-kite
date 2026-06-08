@@ -85,6 +85,9 @@ def main() -> int:
         window.show()
         return app.exec()
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        print(f"Application failed to start: {exc}", flush=True)
         try:
             from PySide6.QtWidgets import QMessageBox
 

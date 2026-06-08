@@ -65,7 +65,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from code.inference.ctr_gcn import TrainConfig, train_validate_test
 from code.inference.data_splitter import build_index, normalize_participant_key
-from code.inference.dataset_builder import process_pose_npz 
+from code.inference.dataset_builder import ProcessedPoseCache, build_dataset_npz_from_items
 
 def load_best_hparams(summary_path: str) -> Dict[str, Any]:
     """Load best hyperparameters from HPO summary."""
@@ -125,40 +125,6 @@ def make_participant_split(
     return train_p, val_p, by_p
 
 
-def build_dataset_npz(
-    items: List,
-    out_path: str,
-    T: int,
-    split_name: str,
-) -> str:
-    """Build a CTR-GCN format NPZ from DatumMeta items."""
-    data_list: List[np.ndarray] = []
-    labels: List[int] = []
-    meta_list: List[Dict] = []
-
-    for it in items:
-        d, y, m = process_pose_npz(it.npz_path, T)
-        data_list.append(d)
-        labels.append(y)
-        meta_list.append(m)
-
-    if not data_list:
-        raise RuntimeError(f"No items for {split_name}")
-
-    data_arr = np.stack(data_list, axis=0)        # (N, C, T, V, M)
-    labels_arr = np.array(labels, dtype=np.int64)  # (N,)
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    np.savez_compressed(
-        out_path,
-        data=data_arr,
-        labels=labels_arr,
-        meta=np.array(meta_list, dtype=object),
-    )
-    print(f"[production] Saved {split_name}: {data_arr.shape} -> {out_path}")
-    return out_path
-
-
 def main():
     os.makedirs(PRODUCTION_OUT_DIR, exist_ok=True)
 
@@ -178,10 +144,15 @@ def main():
     for p in val_p:
         val_items.extend(sorted(by_p[p], key=lambda x: x.rel_path))
 
-    # 3. Build dataset NPZs
+    # 3. Build dataset NPZs (shared cache processes each raw NPZ once)
+    cache = ProcessedPoseCache(T=FIXED_T)
     dataset_dir = os.path.join(PRODUCTION_OUT_DIR, "dataset")
-    train_npz = build_dataset_npz(train_items, os.path.join(dataset_dir, "train.npz"), FIXED_T, "train")
-    val_npz = build_dataset_npz(val_items, os.path.join(dataset_dir, "val.npz"), FIXED_T, "val")
+    train_npz = build_dataset_npz_from_items(
+        train_items, FIXED_T, os.path.join(dataset_dir, "train.npz"), "train", cache=cache,
+    )
+    val_npz = build_dataset_npz_from_items(
+        val_items, FIXED_T, os.path.join(dataset_dir, "val.npz"), "val", cache=cache,
+    )
 
     # 4. Save split info
     split_info = {

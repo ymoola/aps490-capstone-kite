@@ -16,7 +16,10 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from ctr_gcn import TrainConfig, train_validate_test
+try:
+    from code.inference.ctr_gcn import TrainConfig, train_validate_test
+except ModuleNotFoundError:
+    from ctr_gcn import TrainConfig, train_validate_test
 
 
 # ============================================================
@@ -294,8 +297,10 @@ def main():
             if isinstance(result, dict):
                 history = result.get("history")
                 val_metrics = result.get("val_metrics")
-                test_metrics = result.get("test_metrics")
+                test_metrics = result.get("test_metrics") or result.get("final_test")
                 best_ckpt = result.get("best_ckpt")
+                if best_ckpt is None:
+                    best_ckpt = (result.get("paths") or {}).get("best_ckpt")
             else:
                 history = None
                 val_metrics = None

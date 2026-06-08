@@ -12,6 +12,8 @@ __pycache__/
 # C extensions
 *.so
 
+kite-computer-vision-slip-detector/.claude/
+
 # Kite CV slip detector - data/artifacts (kept locally, not tracked)
 kite-computer-vision-slip-detector/outputs/
 kite-computer-vision-slip-detector/runs/

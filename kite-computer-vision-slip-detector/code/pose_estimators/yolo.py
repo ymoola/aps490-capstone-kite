@@ -44,7 +44,22 @@ def iter_videos(root: str):
 
 
 def load_model(model_path: str) -> YOLO:
-    return YOLO(abspath(model_path))
+    resolved = abspath(model_path)
+    try:
+        return YOLO(resolved)
+    except AttributeError as e:
+        msg = str(e)
+        if "Pose26" in msg or "Pose26r" in msg:
+            raise RuntimeError(
+                "The selected YOLO weights are not compatible with the installed Ultralytics package.\n\n"
+                f"Model file: {resolved}\n\n"
+                "This checkpoint references custom model classes such as Pose26/Pose26r, but your current "
+                "Ultralytics install does not define them. Use one of these options:\n"
+                "  1. Switch to a standard Ultralytics pose model checkpoint.\n"
+                "  2. Reinstall the exact Ultralytics/fork version that was used to create this checkpoint.\n"
+                "  3. Export or convert the model from the original training environment.\n"
+            ) from e
+        raise
 
 
 def _skeleton_center(xy: np.ndarray, conf: np.ndarray | None, conf_thr: float) -> np.ndarray:

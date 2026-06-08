@@ -6,7 +6,7 @@ import sys
 import json
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, Any, List
+from typing import Dict, Optional, Tuple, Any, List, Callable
 
 import numpy as np
 import torch
@@ -194,7 +194,15 @@ class TrainConfig:
     out_dir: str = "runs/ctr_gcn"
     save_best: bool = True
     best_metric: str = "val_balanced_acc"  # or "val_acc"
-    
+
+
+class TrainingCancelled(Exception):
+    """Raised when the user requests cooperative cancellation."""
+
+
+def _check_cancelled(should_stop: Optional[Callable[[], bool]]) -> None:
+    if should_stop and should_stop():
+        raise TrainingCancelled("Training cancelled by user.")
 
 
 # -----------------------------
@@ -253,10 +261,26 @@ def _make_class_weights(labels: np.ndarray) -> torch.Tensor:
     return torch.tensor(weights, dtype=torch.float32)
 
 
+def _format_class_counts(counts: Dict[int, int]) -> str:
+    return f"pass(0)={counts.get(0, 0)} fail(1)={counts.get(1, 0)}"
+
+
+def _effective_num_workers(cfg: TrainConfig) -> int:
+    workers = max(0, int(cfg.num_workers))
+    if sys.platform == "win32" and getattr(sys, "frozen", False) and workers > 0:
+        print(
+            f"[ctr_gcn] packaged Windows build detected; forcing num_workers=0 "
+            f"(configured {workers}) to avoid DataLoader child-process relaunch issues"
+        )
+        return 0
+    return workers
+
+
 def make_train_loader(
     ds: PoseNPZDataset,
     cfg: TrainConfig,
 ) -> DataLoader:
+    num_workers = _effective_num_workers(cfg)
     if cfg.use_weighted_sampler:
         labels = ds.labels
         counts = np.bincount(labels, minlength=2).astype(np.float64)
@@ -272,7 +296,7 @@ def make_train_loader(
             ds,
             batch_size=cfg.batch_size,
             sampler=sampler,
-            num_workers=cfg.num_workers,
+            num_workers=num_workers,
             pin_memory=True,
             drop_last=True,
         )
@@ -281,18 +305,19 @@ def make_train_loader(
         ds,
         batch_size=cfg.batch_size,
         shuffle=True,
-        num_workers=cfg.num_workers,
+        num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
     )
 
 
 def make_eval_loader(ds: PoseNPZDataset, cfg: TrainConfig) -> DataLoader:
+    num_workers = _effective_num_workers(cfg)
     return DataLoader(
         ds,
         batch_size=cfg.batch_size,
         shuffle=False,
-        num_workers=cfg.num_workers,
+        num_workers=num_workers,
         pin_memory=True,
         drop_last=False,
     )
@@ -307,13 +332,20 @@ def run_one_epoch_train(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
+    should_stop: Optional[Callable[[], bool]] = None,
+    epoch: Optional[int] = None,
 ) -> Dict[str, float]:
     model.train()
     total_loss = 0.0
     all_logits = []
     all_y = []
+    total_batches = len(loader)
+    log_every = max(1, total_batches // 5) if total_batches else 1
+    if epoch is not None:
+        print(f"[ctr_gcn] epoch {epoch:03d} train start | batches={total_batches} batch_size={loader.batch_size}")
 
-    for x, y in loader:
+    for batch_idx, (x, y) in enumerate(loader, start=1):
+        _check_cancelled(should_stop)
         x = x.to(device, non_blocking=True)  # (B,C,T,V,M)
         y = y.to(device, non_blocking=True)  # (B,)
 
@@ -326,6 +358,11 @@ def run_one_epoch_train(
         total_loss += float(loss.item()) * x.size(0)
         all_logits.append(logits.detach().cpu())
         all_y.append(y.detach().cpu())
+        if batch_idx == 1 or batch_idx == total_batches or batch_idx % log_every == 0:
+            print(
+                f"[ctr_gcn] epoch {epoch:03d} train batch {batch_idx}/{total_batches} "
+                f"| loss {loss.item():.4f}"
+            )
 
     logits_cat = torch.cat(all_logits, dim=0)
     y_cat = torch.cat(all_y, dim=0)
@@ -343,13 +380,21 @@ def run_one_epoch_eval(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    should_stop: Optional[Callable[[], bool]] = None,
+    epoch: Optional[int] = None,
+    split_name: str = "eval",
 ) -> Dict[str, float]:
     model.eval()
     total_loss = 0.0
     all_logits = []
     all_y = []
+    total_batches = len(loader)
+    log_every = max(1, total_batches // 5) if total_batches else 1
+    if epoch is not None:
+        print(f"[ctr_gcn] epoch {epoch:03d} {split_name} start | batches={total_batches} batch_size={loader.batch_size}")
 
-    for x, y in loader:
+    for batch_idx, (x, y) in enumerate(loader, start=1):
+        _check_cancelled(should_stop)
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
 
@@ -359,6 +404,11 @@ def run_one_epoch_eval(
         total_loss += float(loss.item()) * x.size(0)
         all_logits.append(logits.detach().cpu())
         all_y.append(y.detach().cpu())
+        if batch_idx == 1 or batch_idx == total_batches or batch_idx % log_every == 0:
+            print(
+                f"[ctr_gcn] epoch {epoch:03d} {split_name} batch {batch_idx}/{total_batches} "
+                f"| loss {loss.item():.4f}"
+            )
 
     logits_cat = torch.cat(all_logits, dim=0)
     y_cat = torch.cat(all_y, dim=0)
@@ -381,11 +431,13 @@ def train_validate_test(
     test_npz: str,
     model_kwargs: dict,
     cfg: TrainConfig,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     os.makedirs(cfg.out_dir, exist_ok=True)
     device = torch.device(cfg.device)
 
     # datasets
+    print("[ctr_gcn] loading datasets...")
     ds_train = PoseNPZDataset(train_npz)
     ds_val = PoseNPZDataset(val_npz)
     ds_test = PoseNPZDataset(test_npz)
@@ -395,23 +447,40 @@ def train_validate_test(
     test_counts = ds_test.class_counts()
 
     # loaders (balance emphasis)
+    print("[ctr_gcn] creating dataloaders...")
     train_loader = make_train_loader(ds_train, cfg)
     val_loader = make_eval_loader(ds_val, cfg)
     test_loader = make_eval_loader(ds_test, cfg)
+    print(
+        f"[ctr_gcn] dataloaders ready | train_samples={len(ds_train)} val_samples={len(ds_val)} test_samples={len(ds_test)} "
+        f"| train_batches={len(train_loader)} val_batches={len(val_loader)} test_batches={len(test_loader)}"
+    )
 
     # model
+    print("[ctr_gcn] building CTR-GCN model...")
     model = build_ctr_gcn_model(ctr_repo_root=ctr_repo_root, **model_kwargs)
     model = model.to(device)
     print(f"[ctr_gcn] Model device: {next(model.parameters()).device}")
+    print(
+        "[ctr_gcn] class counts | "
+        f"train {_format_class_counts(train_counts)} | "
+        f"val {_format_class_counts(val_counts)} | "
+        f"test {_format_class_counts(test_counts)}"
+    )
 
     # loss
     if cfg.use_class_weighted_loss:
         w = _make_class_weights(ds_train.labels).to(device)  # (2,)
         criterion = nn.CrossEntropyLoss(weight=w)
+        print(f"[ctr_gcn] class weights | pass(0)={float(w[0]):.4f} fail(1)={float(w[1]):.4f}")
     else:
         criterion = nn.CrossEntropyLoss()
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(
+        f"[ctr_gcn] optimizer ready | lr={cfg.lr} weight_decay={cfg.weight_decay} "
+        f"| device={device} workers={_effective_num_workers(cfg)}"
+    )
 
     # training
     best_score = -1e9
@@ -421,9 +490,18 @@ def train_validate_test(
     history: List[dict] = []
     t0 = time.time()
     epochs_no_improve = 0
+    stop_reason = "max_epochs"
+    best_val_metrics: Optional[Dict[str, float]] = None
     for epoch in range(1, cfg.epochs + 1):
-        tr = run_one_epoch_train(model, train_loader, optimizer, criterion, device)
-        va = run_one_epoch_eval(model, val_loader, criterion, device)
+        _check_cancelled(should_stop)
+        print(f"[ctr_gcn] epoch {epoch:03d} begin")
+        tr = run_one_epoch_train(
+            model, train_loader, optimizer, criterion, device, should_stop=should_stop, epoch=epoch
+        )
+        _check_cancelled(should_stop)
+        va = run_one_epoch_eval(
+            model, val_loader, criterion, device, should_stop=should_stop, epoch=epoch, split_name="val"
+        )
 
         row = {
             "epoch": epoch,
@@ -459,6 +537,18 @@ def train_validate_test(
         if cfg.save_best and score > best_score:
             best_score = score
             epochs_no_improve = 0
+            best_val_metrics = {
+                "epoch": epoch,
+                "loss": float(va["loss"]),
+                "acc": float(va["acc"]),
+                "balanced_acc": float(va["balanced_acc"]),
+                "tp": int(va.get("tp", 0)),
+                "tn": int(va.get("tn", 0)),
+                "fp": int(va.get("fp", 0)),
+                "fn": int(va.get("fn", 0)),
+                "tpr_fail": float(va.get("tpr_fail", 0.0)),
+                "tnr_pass": float(va.get("tnr_pass", 0.0)),
+            }
 
             torch.save(
                 {
@@ -481,16 +571,21 @@ def train_validate_test(
 
         if epochs_no_improve >= cfg.patience:
             print(f"Early stopping at epoch {epoch}")
+            stop_reason = "early_stopping"
             break
 
-
+    _check_cancelled(should_stop)
 
     # load best and test
     if cfg.save_best and os.path.isfile(best_path):
+        print(f"[ctr_gcn] loading best checkpoint: {best_path}")
         ckpt = torch.load(best_path, map_location=device)
         model.load_state_dict(ckpt["model_state"])
 
-    te = run_one_epoch_eval(model, test_loader, criterion, device)
+    print("[ctr_gcn] starting final test evaluation...")
+    te = run_one_epoch_eval(
+        model, test_loader, criterion, device, should_stop=should_stop, epoch=len(history) or 0, split_name="test"
+    )
 
     # write summary
     summary = {
@@ -506,8 +601,16 @@ def train_validate_test(
             "val": val_counts,
             "test": test_counts,
         },
+        "best_ckpt": best_path if os.path.isfile(best_path) else None,
+        "val_metrics": best_val_metrics,
+        "test_metrics": te,
         "final_test": te,
         "history": history,
+        "epochs_completed": len(history),
+        "requested_epochs": cfg.epochs,
+        "completed": True,
+        "stop_reason": stop_reason,
+        "patience_hit": stop_reason == "early_stopping",
         "elapsed_sec": time.time() - t0,
         "notes": {
             "imbalance_handling": {

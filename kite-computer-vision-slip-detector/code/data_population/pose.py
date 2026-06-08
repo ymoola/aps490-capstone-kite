@@ -10,10 +10,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from code.pose_estimators import yolo as yolo_backend
-from code.pose_estimators import mp_pose_landmarker as mp_backend
-from code.pose_estimators import openpose_backend as op_backend
-
 _MODELS_DIR = str(_PROJECT_ROOT / "models")
 
 
@@ -54,9 +50,11 @@ class PoseExtractor:
         self._mp_next_ts_ms = 0
 
         if self.backend_name == "yolo":
+            from code.pose_estimators import yolo as yolo_backend
             self.model = yolo_backend.load_model(cfg.yolo_model_path)
 
         elif self.backend_name == "mediapipe":
+            from code.pose_estimators import mp_pose_landmarker as mp_backend
             self.model = mp_backend.load_model(
                 model_path=cfg.mp_model_path,
                 num_poses=cfg.mp_num_poses,
@@ -65,6 +63,7 @@ class PoseExtractor:
                 min_tracking_confidence=cfg.mp_min_track_conf,
             )
         elif self.backend_name == "openpose":
+            from code.pose_estimators import openpose_backend as op_backend
             self.model = op_backend.OpenPoseConfig(
                 openpose_exe=self.cfg.op_exe_path,
                 model_folder=self.cfg.op_model_folder,
@@ -78,6 +77,7 @@ class PoseExtractor:
 
     def extract_pose_from_video(self, video_path: str, *, conf_thr: float = 0.0):
         if self.backend_name == "yolo":
+            from code.pose_estimators import yolo as yolo_backend
             return yolo_backend.extract_pose_from_video(
                 video_path,
                 self.model,
@@ -88,6 +88,7 @@ class PoseExtractor:
             )
 
         if self.backend_name == "mediapipe":
+            from code.pose_estimators import mp_pose_landmarker as mp_backend
             poses, meta, next_ts = mp_backend.extract_pose_from_video(
                 video_path,
                 self.model,
@@ -97,6 +98,7 @@ class PoseExtractor:
             self._mp_next_ts_ms = next_ts            # <<< NEW
             return poses, meta
         if self.backend_name == "openpose":
+            from code.pose_estimators import openpose_backend as op_backend
             return op_backend.extract_pose_from_video(video_path, self.model, conf_thr=conf_thr)
         raise RuntimeError("Unreachable")
 
@@ -105,6 +107,7 @@ def iter_videos(root: str):
     """
     Keep one canonical video iterator.
     """
+    from code.pose_estimators import yolo as yolo_backend
     return yolo_backend.iter_videos(root)
 
 

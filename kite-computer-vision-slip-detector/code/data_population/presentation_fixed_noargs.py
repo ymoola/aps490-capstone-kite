@@ -25,8 +25,8 @@ from pathlib import Path
 import sys
 
 THIS_FILE = Path(__file__).resolve()
-_PROJECT_ROOT = THIS_FILE.parents[2]  # .../CTR-GCN
-CODE_ROOT = THIS_FILE.parents[1]      # .../CTR-GCN/code
+_PROJECT_ROOT = THIS_FILE.parents[2]  # .../kite-computer-vision-slip-detector
+CODE_ROOT = THIS_FILE.parents[1]      # .../kite-computer-vision-slip-detector/code
 
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
