@@ -3,6 +3,39 @@ QMainWindow {
     background-color: #f5f5f5;
 }
 
+QMenuBar {
+    background-color: #ffffff;
+    color: #18366F;
+    border-bottom: 1px solid #d9d9d9;
+}
+
+QMenuBar::item {
+    background-color: transparent;
+    color: #18366F;
+    padding: 6px 10px;
+}
+
+QMenuBar::item:selected {
+    background-color: #e8eef9;
+    border-radius: 4px;
+}
+
+QMenu {
+    background-color: #ffffff;
+    color: #333333;
+    border: 1px solid #cccccc;
+    padding: 4px 0;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+}
+
+QMenu::item:selected {
+    background-color: #18366F;
+    color: #ffffff;
+}
+
 QTabWidget::pane {
     border: 1px solid #cccccc;
     background-color: #ffffff;
